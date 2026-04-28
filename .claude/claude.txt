@@ -1,0 +1,72 @@
+BreachLab Backend — Context SummaryProject
+BreachLab is a cybersecurity practice platform (Frontend Mentor for cybersec). Users download vulnerable apps, find vulns in a VM, and submit auto-graded answers.Stack
+
+Node + Express + TypeScript
+PostgreSQL via Prisma 7
+Auth: Clerk (@clerk/express)
+Storage: AWS S3 (eu-north-1)
+Validation: Zod for env, manual checks in controllers
+Generated Prisma client output: src/generated/prisma
+
+Project structure
+src/
+  config/
+    env.ts              # Zod-validated env
+    db.config.ts        # Prisma client export
+    constants.config.ts # FILE_UPLOAD_CONFIG, API_CONFIG
+  controllers/
+    admin.controller.ts    # createChallenge, uploadChallengeFile, confirmChallengeFile
+    challenge.controller.ts # downloadChallengeFile
+  services/
+    s3.service.ts       # buildChallengeKey, getUploadUrl, getDownloadUrl, deleteObject
+  middlewares/
+    auth.middleware.ts  # requireAuth, requireAdmin
+  routes/
+    admin/challenges.routes.ts
+    challenge.routes.ts
+  utils/
+    ApiResponse.ts      # sendError helper
+    ApiError.ts         # ApiError class
+  generated/prisma/     # Prisma client + enums
+Models (relevant)
+prismamodel Challenge {
+  id          String       @id @default(uuid())
+  title       String
+  description String
+  scenario    String
+  domain      Domain         // APPSEC | SOC | NETWORK | WIRESHARK | GRC
+  difficulty  Difficulty     // BEGINNER | INTERMEDIATE
+  isFree      Boolean        @default(true)
+  points      Int            @default(100)
+  fileKey     String?
+  questions   Question[]
+  submissions Submission[]
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  @@index([domain, difficulty, isFree])
+  @@index([isFree])
+}
+
+model User {
+  id                 String
+  role               Role               // USER | PRO_USER | ADMIN
+  subscriptionStatus SubscriptionStatus // FREE | PRO
+  // ...
+}
+Conventions used in existing controllers
+
+Async function signature: (req, res, next) => { try { ... } catch (error) { console.log(error); next(error); } }
+Errors via sendError(res, status, message) (not res.status().json())
+Enum validation with Object.values(EnumName).includes(value)
+Manual field validation (no Zod in request body — yet)
+Use env.AWS_S3_BUCKET etc. from config/env, not process.env
+req.user populated by requireAuth, type from generated Prisma User
+
+Existing endpoints (already built and working)
+POST   /api/admin/challenges                   # admin: create challenge + questions
+POST   /api/admin/challenges/:id/file/presign  # admin: get S3 upload URL
+POST   /api/admin/challenges/:id/file/confirm  # admin: confirm upload + save fileKey
+GET    /api/challenges/:id/download            # auth: get S3 download URL (PRO gate on isFree=false)
+What's needed next
+GET /api/challenges — list challenges with filtering, pagination, search.

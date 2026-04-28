@@ -1,0 +1,108 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id                 String             @id @default(uuid())
+  clerkId            String             @unique
+  username           String             @unique
+  email              String             @unique
+  avatar             String?
+  bio                String?
+  provider           String             @default("email")
+  role               Role               @default(USER)
+  subscriptionStatus SubscriptionStatus @default(FREE)
+  paystackCustomerId String?
+  submissions        Submission[]
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  @@index([paystackCustomerId])
+}
+
+model Challenge {
+  id          String       @id @default(uuid())
+  title       String
+  description String
+  scenario    String
+  domain      Domain
+  difficulty  Difficulty
+  isFree      Boolean      @default(true)
+  points      Int          @default(100)
+  fileKey     String?
+  questions   Question[]
+  submissions Submission[]
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  // covers domain-only, domain+difficulty, and full triple filter
+  @@index([domain, difficulty, isFree])
+  // covers standalone free/pro filter without domain
+  @@index([isFree])
+}
+
+model Question {
+  id          String    @id @default(uuid())
+  challengeId String
+  challenge   Challenge @relation(fields: [challengeId], references: [id], onDelete: Cascade)
+  text        String
+  answerKey   String
+  order       Int
+
+  // unique enforces no duplicate positions + index covers ordered fetch
+  @@unique([challengeId, order])
+}
+
+model Submission {
+  id            String    @id @default(uuid())
+  userId        String
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  challengeId   String
+  challenge     Challenge @relation(fields: [challengeId], references: [id])
+  answers       Json
+  score         Int
+  passed        Boolean
+  reportUrl     String?
+  attemptNumber Int
+  createdAt     DateTime  @default(now())
+
+  // user's full submission history
+  @@index([userId])
+  // admin: all submissions for a challenge
+  @@index([challengeId])
+  // unique enforces no duplicate attempt numbers + covers (userId, challengeId) prefix for attempt lookup
+  @@unique([userId, challengeId, attemptNumber])
+  // leaderboard: count completed challenges per user
+  @@index([userId, passed])
+  // public gallery: filter passed, order by date
+  @@index([passed, createdAt])
+}
+
+enum Role {
+  USER
+  PRO_USER
+  ADMIN
+}
+
+enum SubscriptionStatus {
+  FREE
+  PRO
+}
+
+enum Domain {
+  APPSEC
+  SOC
+  NETWORK
+  WIRESHARK
+  GRC
+}
+
+enum Difficulty {
+  BEGINNER
+  INTERMEDIATE
+}
