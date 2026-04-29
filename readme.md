@@ -381,6 +381,63 @@ Build on runner → SCP compiled output to EC2 → PM2 reload. Same pattern you 
 
 ---
 
+Feature roadmap (next few sprints)
+Listing only — we'll spec each one when it's its turn.
+Sprint 1: Make the product playable (1 week)
+The minimum bar where someone can actually use BreachLab.
+
+Submission endpoint (POST /api/challenges/:id/submit) — grades answers, creates Submission row
+My submissions endpoint (GET /api/me/submissions)
+Get-current-user endpoint (GET /api/me)
+Frontend: landing page (basic)
+Frontend: login/signup (Clerk handles most of it)
+Frontend: challenges list (uses your existing list endpoint)
+Frontend: challenge detail page with download button
+Frontend: submit answers form
+Frontend: submission result screen (score, passed/failed)
+
+End of Sprint 1: a logged-in user can browse, download, solve, submit, see their score. Product is functional.
+Sprint 2: Enable revenue (3-5 days)
+
+Paystack subscription initialization endpoint
+Paystack webhook handler (handles successful payments, renewals, cancellations)
+Subscription status endpoint
+Cancel subscription endpoint
+Frontend: pricing page
+Frontend: upgrade flow / paywall on paid challenges
+Frontend: billing settings page
+
+End of Sprint 2: people can pay you money.
+Sprint 3: Social/competitive layer (3-5 days)
+
+Leaderboard endpoint (with caching this time — Redis)
+Frontend: leaderboard page
+Profile/public profile page
+Achievement/badge logic (if you want it for v1)
+
+Sprint 4: Admin tooling (3-5 days)
+So you stop using Postman to create challenges.
+
+Admin: edit challenge endpoint
+Admin: delete challenge endpoint (with S3 cleanup)
+Admin: list users endpoint
+Admin: stats / dashboard endpoint
+Frontend: admin dashboard (challenge CRUD, user view, stats)
+Frontend: file upload UI (the 4-call dance wrapped in one button)
+
+Sprint 5: Polish + Launch (1 week)
+
+Rate limiting (express-rate-limit on auth-sensitive routes)
+Error monitoring (Sentry)
+Logging (Winston + Logtail)
+Email flows (welcome email, payment receipts via Resend)
+CORS lockdown for prod
+Performance pass (DB query analysis, N+1 audit)
+Marketing site polish
+Privacy policy, ToS pages
+Soft launch — share with a few cybersec friends, get feedback
+Public launch — Twitter, LinkedIn, Reddit r/cybersecurity, HackerNews
+
 ## License
 
 MIT

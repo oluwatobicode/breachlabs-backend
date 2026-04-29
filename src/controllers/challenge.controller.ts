@@ -2,7 +2,12 @@ import { NextFunction, Request, Response } from "express";
 import { sendError } from "../utils/ApiResponse";
 import { prisma } from "../config/db.config";
 import { getDownloadUrl } from "../services/s3.service";
-import { Domain, Difficulty, SubscriptionStatus } from "../generated/prisma/enums";
+import {
+  Domain,
+  Difficulty,
+  SubscriptionStatus,
+} from "../generated/prisma/enums";
+import { Prisma } from "../generated/prisma/client";
 
 const SORT_MAP = {
   newest: { createdAt: "desc" as const },
@@ -27,7 +32,8 @@ export const listChallenges = async (
     const rawPage = req.query.page;
     const rawLimit = req.query.limit;
     const page = typeof rawPage === "string" ? Number(rawPage) : 1;
-    const limit = typeof rawLimit === "string" ? Number(rawLimit) : DEFAULT_LIMIT;
+    const limit =
+      typeof rawLimit === "string" ? Number(rawLimit) : DEFAULT_LIMIT;
 
     if (!Number.isInteger(page) || page < 1) {
       return sendError(res, 400, "page must be a positive integer");
@@ -37,31 +43,44 @@ export const listChallenges = async (
     }
 
     // --- Sort ---
-    const sortKey = typeof req.query.sort === "string" ? req.query.sort : "newest";
+    const sortKey =
+      typeof req.query.sort === "string" ? req.query.sort : "newest";
     if (!(sortKey in SORT_MAP)) {
-      return sendError(res, 400, `sort must be one of: ${Object.keys(SORT_MAP).join(", ")}`);
+      return sendError(
+        res,
+        400,
+        `sort must be one of: ${Object.keys(SORT_MAP).join(", ")}`,
+      );
     }
     const orderBy = SORT_MAP[sortKey as keyof typeof SORT_MAP];
 
     // --- Filters ---
     const { domain, difficulty, isFree, search } = req.query;
-    const where: Record<string, unknown> = {};
+    const where: Prisma.ChallengeWhereInput = {};
 
     if (domain && typeof domain === "string") {
       if (!Object.values(Domain).includes(domain as Domain)) {
-        return sendError(res, 400, `domain must be one of: ${Object.values(Domain).join(", ")}`);
+        return sendError(
+          res,
+          400,
+          `domain must be one of: ${Object.values(Domain).join(", ")}`,
+        );
       }
-      where.domain = domain;
+      where.domain = domain as Domain;
     }
 
     if (difficulty && typeof difficulty === "string") {
       if (!Object.values(Difficulty).includes(difficulty as Difficulty)) {
-        return sendError(res, 400, `difficulty must be one of: ${Object.values(Difficulty).join(", ")}`);
+        return sendError(
+          res,
+          400,
+          `difficulty must be one of: ${Object.values(Difficulty).join(", ")}`,
+        );
       }
-      where.difficulty = difficulty;
+      where.difficulty = difficulty as Difficulty;
     }
 
-    if (isFree && typeof isFree === "string") {
+    if (typeof isFree === "string" && isFree !== "") {
       if (isFree !== "true" && isFree !== "false") {
         return sendError(res, 400, "isFree must be 'true' or 'false'");
       }
@@ -88,8 +107,6 @@ export const listChallenges = async (
           difficulty: true,
           isFree: true,
           points: true,
-          createdAt: true,
-          _count: { select: { questions: true } },
         },
         orderBy,
         skip,
@@ -98,10 +115,26 @@ export const listChallenges = async (
       prisma.challenge.count({ where }),
     ]);
 
+    const completedRows = await prisma.submission.findMany({
+      where: {
+        userId: req.user!.id,
+        passed: true,
+        challengeId: { in: challenges.map((c) => c.id) },
+      },
+      select: { challengeId: true },
+      distinct: ["challengeId"],
+    });
+    const completedSet = new Set(completedRows.map((r) => r.challengeId));
+
+    const challengesWithCompletion = challenges.map((c) => ({
+      ...c,
+      completed: completedSet.has(c.id),
+    }));
+
     const totalPages = Math.ceil(total / limit);
 
     return res.json({
-      challenges,
+      challenges: challengesWithCompletion,
       pagination: {
         total,
         page,
@@ -111,6 +144,48 @@ export const listChallenges = async (
         hasPrev: page > 1,
       },
     });
+  } catch (error) {
+    console.log(error);
+    next(error);
+  }
+};
+
+export const getChallengeById = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
+  try {
+    const id = req.params.id as string;
+
+    const challenge = await prisma.challenge.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        title: true,
+        description: true,
+        scenario: true,
+        domain: true,
+        difficulty: true,
+        passScore: true,
+        objectives: true,
+        tools: true,
+        isFree: true,
+        points: true,
+        createdAt: true,
+        updatedAt: true,
+        questions: {
+          select: { id: true, text: true, order: true },
+          orderBy: { order: "asc" },
+        },
+      },
+    });
+
+    if (!challenge) {
+      return sendError(res, 404, "Challenge not found");
+    }
+
+    return res.json({ challenge });
   } catch (error) {
     console.log(error);
     next(error);

@@ -136,6 +136,9 @@ export const createChallenge = async (
       scenario,
       domain,
       difficulty,
+      passScore,
+      objectives,
+      tools,
       isFree,
       points,
       questions,
@@ -168,6 +171,17 @@ export const createChallenge = async (
       );
     }
 
+    if (
+      passScore !== undefined &&
+      (!Number.isInteger(passScore) || passScore < 1 || passScore > 100)
+    ) {
+      return sendError(
+        res,
+        400,
+        "passScore must be an integer between 1 and 100",
+      );
+    }
+
     // Validate questions
     if (!Array.isArray(questions) || questions.length === 0) {
       return sendError(res, 400, "questions array is required (at least one)");
@@ -197,8 +211,11 @@ export const createChallenge = async (
         title,
         description,
         scenario,
+        objectives,
+        tools,
         domain,
         difficulty,
+        ...(passScore !== undefined && { passScore }),
         ...(typeof isFree === "boolean" && { isFree }),
         ...(typeof points === "number" && { points }),
         questions: {

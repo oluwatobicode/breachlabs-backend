@@ -1,0 +1,2 @@
+-- AlterTable
+ALTER TABLE "User" ALTER COLUMN "badges" SET DEFAULT ARRAY[]::TEXT[];

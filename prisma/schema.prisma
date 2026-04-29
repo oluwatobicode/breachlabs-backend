@@ -14,6 +14,7 @@ model User {
   email              String             @unique
   avatar             String?
   bio                String?
+  badges             String[]           @default([])
   provider           String             @default("email")
   role               Role               @default(USER)
   subscriptionStatus SubscriptionStatus @default(FREE)
@@ -30,6 +31,9 @@ model Challenge {
   title       String
   description String
   scenario    String
+  passScore   Int?         @default(70)
+  objectives  String[]
+  tools       String[]
   domain      Domain
   difficulty  Difficulty
   isFree      Boolean      @default(true)
