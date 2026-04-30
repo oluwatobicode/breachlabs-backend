@@ -11,8 +11,6 @@ const envSchema = z.object({
   AWS_REGION: z.string(),
   AWS_S3_BUCKET: z.string(),
   AWS_PROFILE: z.string().optional(),
-  PAYSTACK_SECRET_KEY: z.string().min(1),
-  PAYSTACK_WEBHOOK_SECRET: z.string().min(1),
   REDIS_URL: z.string().min(1),
   CLIENT_URL: z.string().url(),
 });

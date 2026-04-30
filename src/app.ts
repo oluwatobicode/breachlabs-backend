@@ -22,7 +22,7 @@ import {
 const app: Application = express();
 
 // webhooks registered before express.json() — svix needs the raw body
-app.use("/webhooks", webhookRoutes);
+app.use(`/api/${API_CONFIG.API_V1}/webhooks`, webhookRoutes);
 
 const allowedOrigins = Array.from(
   new Set([
