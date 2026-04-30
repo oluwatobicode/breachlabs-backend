@@ -8,6 +8,7 @@ import helmet from "helmet";
 import morgan from "morgan";
 import { API_CONFIG } from "./config/constants.config";
 import { clerkMiddleware } from "@clerk/express";
+import { env } from "./config/env";
 import { errorMiddleware } from "./middleware/error.middleware";
 import webhookRoutes from "./routes/webhook.routes";
 
@@ -23,20 +24,25 @@ const app: Application = express();
 // webhooks registered before express.json() — svix needs the raw body
 app.use("/webhooks", webhookRoutes);
 
+const allowedOrigins = Array.from(
+  new Set([
+    "http://localhost:5173",
+    "https://breachlabs-app-frontend.vercel.app",
+    env.CLIENT_URL,
+  ]),
+);
+
 // midddlware
 app.use(helmet());
 app.use(
   cors({
-    origin: [
-      "http://localhost:5173",
-      "https://breachlabs-app-frontend.vercel.app",
-    ],
+    origin: allowedOrigins,
     credentials: true,
   }),
 );
 app.use(morgan("dev"));
 app.use(express.json());
-app.use(clerkMiddleware());
+app.use(clerkMiddleware({ authorizedParties: allowedOrigins }));
 app.use(express.urlencoded({ extended: true }));
 
 // Test route
