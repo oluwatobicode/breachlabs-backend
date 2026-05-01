@@ -56,7 +56,7 @@ export const listChallenges = async (
 
     // --- Filters ---
     const { domain, difficulty, isFree, search } = req.query;
-    const where: Prisma.ChallengeWhereInput = {};
+    const where: Prisma.ChallengeWhereInput = { deletedAt: null };
 
     if (domain && typeof domain === "string") {
       if (!Object.values(Domain).includes(domain as Domain)) {
@@ -172,6 +172,7 @@ export const getChallengeById = async (
         tools: true,
         isFree: true,
         points: true,
+        deletedAt: true,
         createdAt: true,
         updatedAt: true,
         questions: {
@@ -181,11 +182,12 @@ export const getChallengeById = async (
       },
     });
 
-    if (!challenge) {
+    if (!challenge || challenge.deletedAt) {
       return sendError(res, 404, "Challenge not found");
     }
 
-    return res.json({ challenge });
+    const { deletedAt, ...rest } = challenge;
+    return res.json({ challenge: rest });
   } catch (error) {
     console.log(error);
     next(error);

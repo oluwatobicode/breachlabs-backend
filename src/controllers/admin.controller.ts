@@ -1,7 +1,7 @@
 import { NextFunction, Request, Response } from "express";
 import { HeadObjectCommand } from "@aws-sdk/client-s3";
-import { sendError } from "../utils/ApiResponse";
-import { FILE_UPLOAD_CONFIG } from "../config/constants.config";
+import { sendError, sendSuccess } from "../utils/ApiResponse";
+import { DEFAULT_LIMIT, FILE_UPLOAD_CONFIG } from "../config/constants.config";
 import { prisma } from "../config/db.config";
 import { env } from "../config/env";
 import {
@@ -10,7 +10,16 @@ import {
   deleteObject,
   s3,
 } from "../services/s3.service";
-import { Difficulty, Domain } from "../generated/prisma/enums";
+import {
+  Difficulty,
+  Domain,
+  Role,
+  SubscriptionStatus,
+} from "../generated/prisma/enums";
+import { Prisma } from "../generated/prisma/client";
+import { updateChallengeSchema } from "../types/admin.types";
+
+const ADMIN_USERS_MAX_LIMIT = 100;
 
 /* validates the request and returns a temporary, signed permission slip (presigned URL) */
 export const uploadChallengeFile = async (
@@ -54,9 +63,13 @@ export const uploadChallengeFile = async (
     const key = buildChallengeKey(id, filename);
     const uploadUrl = await getUploadUrl(key, contentType);
 
-    return res.json({ uploadUrl, key, expiresIn: 300 });
+    return sendSuccess(res, "Upload URL generated", 200, {
+      uploadUrl,
+      key,
+      expiresIn: 300,
+    });
   } catch (error) {
-    console.log(error);
+    console.error(error);
     next(error);
   }
 };
@@ -117,9 +130,9 @@ export const confirmChallengeFile = async (
       data: { fileKey: key },
     });
 
-    return res.json({ message: "File confirmed", challenge: updated });
+    return sendSuccess(res, "File confirmed", 200, { challenge: updated });
   } catch (error) {
-    console.log(error);
+    console.error(error);
     next(error);
   }
 };
@@ -229,12 +242,270 @@ export const createChallenge = async (
       include: { questions: { orderBy: { order: "asc" } } },
     });
 
-    return res.status(201).json({
-      message: "Challenge created",
-      challenge,
+    return sendSuccess(res, "Challenge created", 201, { challenge });
+  } catch (error) {
+    console.error(error);
+    next(error);
+  }
+};
+
+/* -------------------------------------------------------------------------- */
+/*                              Update Challenge                              */
+/* -------------------------------------------------------------------------- */
+
+export const updateChallenge = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
+  try {
+    const id = req.params.id as string;
+
+    const parsed = updateChallengeSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return sendError(res, 400, parsed.error.issues[0].message);
+    }
+
+    const existing = await prisma.challenge.findUnique({
+      where: { id },
+      select: { id: true, deletedAt: true },
+    });
+
+    if (!existing || existing.deletedAt) {
+      return sendError(res, 404, "Challenge not found");
+    }
+
+    const updated = await prisma.challenge.update({
+      where: { id },
+      data: parsed.data as Prisma.ChallengeUpdateInput,
+      include: { questions: { orderBy: { order: "asc" } } },
+    });
+
+    return sendSuccess(res, "Challenge updated", 200, { challenge: updated });
+  } catch (error) {
+    console.error(error);
+    next(error);
+  }
+};
+
+/* Delete Challenge   */
+
+export const deleteChallenge = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
+  try {
+    const id = req.params.id as string;
+
+    const challenge = await prisma.challenge.findUnique({
+      where: { id },
+      select: { id: true, fileKey: true, deletedAt: true },
+    });
+
+    if (!challenge || challenge.deletedAt) {
+      return sendError(res, 404, "Challenge not found");
+    }
+
+    if (challenge.fileKey) {
+      try {
+        await deleteObject(challenge.fileKey);
+      } catch (error) {
+        // Log and continue — DB soft-delete is the source of truth.
+        console.error("Failed to delete S3 object:", challenge.fileKey, error);
+      }
+    }
+
+    await prisma.challenge.update({
+      where: { id },
+      data: { deletedAt: new Date(), fileKey: null },
+    });
+
+    return sendSuccess(res, "Challenge deleted", 200);
+  } catch (error) {
+    console.error(error);
+    next(error);
+  }
+};
+
+/*  List Users  */
+
+export const listUsers = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
+  try {
+    const rawPage = req.query.page;
+    const rawLimit = req.query.limit;
+    const page = typeof rawPage === "string" ? Number(rawPage) : 1;
+    const limit =
+      typeof rawLimit === "string" ? Number(rawLimit) : DEFAULT_LIMIT;
+
+    if (!Number.isInteger(page) || page < 1) {
+      return sendError(res, 400, "page must be a positive integer");
+    }
+    if (
+      !Number.isInteger(limit) ||
+      limit < 1 ||
+      limit > ADMIN_USERS_MAX_LIMIT
+    ) {
+      return sendError(
+        res,
+        400,
+        `limit must be between 1 and ${ADMIN_USERS_MAX_LIMIT}`,
+      );
+    }
+
+    const { search, role, subscriptionStatus } = req.query;
+    const where: Prisma.UserWhereInput = {};
+
+    if (typeof role === "string" && role !== "") {
+      if (!Object.values(Role).includes(role as Role)) {
+        return sendError(
+          res,
+          400,
+          `role must be one of: ${Object.values(Role).join(", ")}`,
+        );
+      }
+      where.role = role as Role;
+    }
+
+    if (typeof subscriptionStatus === "string" && subscriptionStatus !== "") {
+      if (
+        !Object.values(SubscriptionStatus).includes(
+          subscriptionStatus as SubscriptionStatus,
+        )
+      ) {
+        return sendError(
+          res,
+          400,
+          `subscriptionStatus must be one of: ${Object.values(SubscriptionStatus).join(", ")}`,
+        );
+      }
+      where.subscriptionStatus = subscriptionStatus as SubscriptionStatus;
+    }
+
+    if (typeof search === "string" && search.trim()) {
+      where.OR = [
+        { username: { contains: search.trim(), mode: "insensitive" } },
+        { email: { contains: search.trim(), mode: "insensitive" } },
+      ];
+    }
+
+    const skip = (page - 1) * limit;
+
+    const [users, total] = await prisma.$transaction([
+      prisma.user.findMany({
+        where,
+        select: {
+          id: true,
+          username: true,
+          email: true,
+          avatar: true,
+          bio: true,
+          role: true,
+          subscriptionStatus: true,
+          badges: true,
+          createdAt: true,
+          updatedAt: true,
+        },
+        orderBy: { createdAt: "desc" },
+        skip,
+        take: limit,
+      }),
+      prisma.user.count({ where }),
+    ]);
+
+    const totalPages = Math.ceil(total / limit);
+
+    return sendSuccess(res, "Users fetched", 200, {
+      users,
+      page,
+      limit,
+      total,
+      totalPages,
     });
   } catch (error) {
-    console.log(error);
+    console.error(error);
+    next(error);
+  }
+};
+
+/* Admin Stats   */
+
+export const getAdminStats = async (
+  _req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
+  try {
+    const [
+      users,
+      proUsers,
+      challenges,
+      submissions,
+      passedSubmissions,
+      recentSignups,
+      recentSubmissions,
+    ] = await prisma.$transaction([
+      prisma.user.count(),
+      prisma.user.count({
+        where: { subscriptionStatus: SubscriptionStatus.PRO },
+      }),
+      prisma.challenge.count({ where: { deletedAt: null } }),
+      prisma.submission.count(),
+      prisma.submission.count({
+        where: {
+          passed: true,
+          challenge: { deletedAt: null },
+        },
+      }),
+      prisma.user.findMany({
+        orderBy: { createdAt: "desc" },
+        take: 10,
+        select: {
+          id: true,
+          username: true,
+          email: true,
+          avatar: true,
+          role: true,
+          subscriptionStatus: true,
+          createdAt: true,
+        },
+      }),
+      prisma.submission.findMany({
+        orderBy: { createdAt: "desc" },
+        take: 10,
+        select: {
+          id: true,
+          score: true,
+          passed: true,
+          attemptNumber: true,
+          createdAt: true,
+          user: {
+            select: { id: true, username: true, avatar: true },
+          },
+          challenge: {
+            select: { id: true, title: true },
+          },
+        },
+      }),
+    ]);
+
+    return sendSuccess(res, "Stats fetched", 200, {
+      totals: {
+        users,
+        proUsers,
+        challenges,
+        submissions,
+        passedSubmissions,
+      },
+      recentSignups,
+      recentSubmissions,
+    });
+  } catch (error) {
+    console.error(error);
     next(error);
   }
 };

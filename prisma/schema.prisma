@@ -43,6 +43,7 @@ model Challenge {
   submissions Submission[]
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
+  deletedAt   DateTime?
 
   // covers domain-only, domain+difficulty, and full triple filter
   @@index([domain, difficulty, isFree])
