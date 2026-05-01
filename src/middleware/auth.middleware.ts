@@ -34,6 +34,25 @@ export const requireAuth = async (
   }
 };
 
+export const optionalAuth = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
+  try {
+    const { userId } = getAuth(req);
+    if (userId) {
+      const user = await prisma.user.findUnique({
+        where: { clerkId: userId },
+      });
+      if (user) req.user = user;
+    }
+    next();
+  } catch {
+    next();
+  }
+};
+
 export const requireAdmin = async (
   req: Request,
   res: Response,

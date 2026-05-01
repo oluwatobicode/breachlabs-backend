@@ -1,0 +1,220 @@
+{
+  "info": {
+    "name": "BreachLab Admin API",
+    "description": "Admin endpoints under /api/v1/admin/*. All routes require an authenticated user with role=ADMIN. Auth is via Clerk session JWT in the Authorization header.\n\nSet the collection variables before running:\n- baseUrl (e.g. http://localhost:3000/api/v1)\n- adminToken (Clerk session JWT for an ADMIN user)\n- challengeId / userId as needed",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      { "key": "token", "value": "{{adminToken}}", "type": "string" }
+    ]
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:3000/api/v1", "type": "string" },
+    { "key": "adminToken", "value": "REPLACE_WITH_CLERK_SESSION_JWT", "type": "string" },
+    { "key": "challengeId", "value": "REPLACE_WITH_CHALLENGE_UUID", "type": "string" },
+    { "key": "fileKey", "value": "challenges/REPLACE_WITH_CHALLENGE_UUID/REPLACE_WITH_UUID-filename.zip", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "Challenges",
+      "item": [
+        {
+          "name": "Create Challenge",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/challenge",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "challenge"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"SQL Injection 101\",\n  \"description\": \"Practice classic SQLi against a vulnerable login form.\",\n  \"scenario\": \"You're a junior pentester. Bypass the login of the staging app and exfiltrate the admin email.\",\n  \"domain\": \"APPSEC\",\n  \"difficulty\": \"BEGINNER\",\n  \"passScore\": 70,\n  \"objectives\": [\n    \"Bypass the login\",\n    \"Extract the admin email\"\n  ],\n  \"tools\": [\"Burp Suite\", \"sqlmap\"],\n  \"isFree\": true,\n  \"points\": 100,\n  \"questions\": [\n    {\n      \"text\": \"What payload bypassed authentication?\",\n      \"answerKey\": \"' OR 1=1 --\",\n      \"order\": 1\n    },\n    {\n      \"text\": \"What is the admin email?\",\n      \"answerKey\": \"admin@breachlab.test\",\n      \"order\": 2\n    }\n  ]\n}"
+            },
+            "description": "Creates a challenge with at least one question. Required: title, description, scenario, domain, difficulty, questions[]. Optional: passScore (1-100), objectives, tools, isFree (default true), points (default 100).\n\ndomain: APPSEC | SOC | NETWORK | WIRESHARK | GRC\ndifficulty: BEGINNER | INTERMEDIATE"
+          }
+        },
+        {
+          "name": "Update Challenge (PATCH)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/challenges/{{challengeId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "challenges", "{{challengeId}}"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"SQL Injection 101 (Revised)\",\n  \"description\": \"Updated description.\",\n  \"scenario\": \"Updated scenario text.\",\n  \"passScore\": 75,\n  \"objectives\": [\"Bypass the login\", \"Extract the admin email\", \"Document the vector\"],\n  \"tools\": [\"Burp Suite\", \"sqlmap\", \"curl\"],\n  \"domain\": \"APPSEC\",\n  \"difficulty\": \"INTERMEDIATE\",\n  \"isFree\": false,\n  \"points\": 150\n}"
+            },
+            "description": "Partial update — every field is optional, but at least one must be provided. Cannot edit: id, fileKey, createdAt, updatedAt, questions. Returns 404 if the challenge is missing or soft-deleted."
+          }
+        },
+        {
+          "name": "Update Challenge — minimal example",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/challenges/{{challengeId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "challenges", "{{challengeId}}"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"isFree\": false\n}"
+            },
+            "description": "Smallest valid PATCH — flip a single field."
+          }
+        },
+        {
+          "name": "Delete Challenge (soft delete)",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{baseUrl}}/admin/challenges/{{challengeId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "challenges", "{{challengeId}}"]
+            },
+            "description": "Soft-deletes the challenge (sets deletedAt) and removes the file from S3 if one exists. List/detail endpoints will hide it after this call. Returns 404 if missing or already deleted."
+          }
+        },
+        {
+          "name": "Presign Upload URL",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/challenges/{{challengeId}}/file/presign",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "challenges", "{{challengeId}}", "file", "presign"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"filename\": \"sqli-101.zip\",\n  \"contentType\": \"application/zip\",\n  \"sizeBytes\": 1048576\n}"
+            },
+            "description": "Returns a short-lived (5 min) presigned S3 PUT URL. Allowed contentType: application/zip or application/x-zip-compressed. Max size: 500 MB. sizeBytes is optional but recommended for client-side validation."
+          }
+        },
+        {
+          "name": "Confirm Upload",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/challenges/{{challengeId}}/file/confirm",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "challenges", "{{challengeId}}", "file", "confirm"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"key\": \"{{fileKey}}\"\n}"
+            },
+            "description": "Confirms a file uploaded via the presigned URL. The key must be the one returned from /presign and must start with challenges/{id}/. The server verifies the object exists in S3 (HeadObject) before persisting fileKey on the challenge. If a previous file existed, it is deleted from S3."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Users",
+      "item": [
+        {
+          "name": "List Users",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/admin/users?page=1&limit=20",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "users"],
+              "query": [
+                { "key": "page", "value": "1", "description": "Positive integer. Default 1." },
+                { "key": "limit", "value": "20", "description": "1–100. Default 20." },
+                { "key": "search", "value": "", "description": "Case-insensitive match against username OR email.", "disabled": true },
+                { "key": "role", "value": "USER", "description": "USER | PRO_USER | ADMIN", "disabled": true },
+                { "key": "subscriptionStatus", "value": "FREE", "description": "FREE | PRO", "disabled": true }
+              ]
+            },
+            "description": "Paginated list of users sorted by createdAt desc. clerkId and paystackCustomerId are excluded from the response."
+          }
+        },
+        {
+          "name": "List Users — search",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/admin/users?search=ada&limit=10",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "users"],
+              "query": [
+                { "key": "search", "value": "ada" },
+                { "key": "limit", "value": "10" }
+              ]
+            },
+            "description": "Search by username or email (case-insensitive contains)."
+          }
+        },
+        {
+          "name": "List Users — only PRO subscribers",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/admin/users?subscriptionStatus=PRO",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "users"],
+              "query": [
+                { "key": "subscriptionStatus", "value": "PRO" }
+              ]
+            },
+            "description": "Filter by subscription tier."
+          }
+        },
+        {
+          "name": "List Users — only ADMINs",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/admin/users?role=ADMIN",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "users"],
+              "query": [
+                { "key": "role", "value": "ADMIN" }
+              ]
+            },
+            "description": "Filter by role."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Stats",
+      "item": [
+        {
+          "name": "Admin Stats",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/admin/stats",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "stats"]
+            },
+            "description": "Aggregate dashboard stats: totals (users, proUsers, challenges, submissions, passedSubmissions), recentSignups (last 10 users), recentSubmissions (last 10 with user + challenge). passedSubmissions excludes submissions against soft-deleted challenges."
+          }
+        }
+      ]
+    }
+  ]
+}

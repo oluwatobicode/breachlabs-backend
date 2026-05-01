@@ -115,15 +115,17 @@ export const listChallenges = async (
       prisma.challenge.count({ where }),
     ]);
 
-    const completedRows = await prisma.submission.findMany({
-      where: {
-        userId: req.user!.id,
-        passed: true,
-        challengeId: { in: challenges.map((c) => c.id) },
-      },
-      select: { challengeId: true },
-      distinct: ["challengeId"],
-    });
+    const completedRows = req.user
+      ? await prisma.submission.findMany({
+          where: {
+            userId: req.user.id,
+            passed: true,
+            challengeId: { in: challenges.map((c) => c.id) },
+          },
+          select: { challengeId: true },
+          distinct: ["challengeId"],
+        })
+      : [];
     const completedSet = new Set(completedRows.map((r) => r.challengeId));
 
     const challengesWithCompletion = challenges.map((c) => ({
