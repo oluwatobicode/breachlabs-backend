@@ -13,6 +13,12 @@ const envSchema = z.object({
   AWS_PROFILE: z.string().optional(),
   REDIS_URL: z.string().min(1),
   CLIENT_URL: z.string().url(),
+  POLAR_ACCESS_TOKEN: z.string().min(1),
+  POLAR_WEBHOOK_SECRET: z.string().min(1),
+  POLAR_YEARLY_PRODUCT_ID: z.string().min(1),
+  POLAR_MONTHLY_PRODUCT_ID: z.string().min(1),
+  POLAR_SERVER: z.enum(["sandbox", "production"]).default("sandbox"),
+  CHECKOUT_SUCCESS_URL: z.string().url(),
 });
 
 const parsed = envSchema.safeParse(process.env);

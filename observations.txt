@@ -1,0 +1,202 @@
+BreachLab Backend — Code Review Observations
+=============================================
+
+Suggested fix order: 1, 2, 4, 6, 9, then 3, 5, 7, 8, 11.
+
+---------------------------------------------
+CRITICAL / DATA INTEGRITY
+---------------------------------------------
+
+[1] syncUserUpdated overwrites the user's chosen username
+    File: src/services/clerk.service.ts:45-64
+    Clerk fires user.updated for any change (avatar, email, etc.). The
+    handler sets update: { username: base } where base falls back to the
+    Clerk username or email prefix — so any user who renamed themselves
+    via PATCH /users/me has it clobbered the next time anything in their
+    Clerk profile changes.
+    Fix: don't touch username in the update branch unless it's actually
+    changing AND the user hasn't customized it locally.
+
+[2] No webhook idempotency / replay protection
+    File: src/routes/webhook.routes.ts
+    Svix retries any non-2xx response forever. Concrete failure modes:
+      - Duplicate user.created → clerkId unique violation → 500 → loop.
+      - user.deleted for an unsynced user → P2025 → 500 → loop.
+      - getPrimaryEmail throws if no primary email → 500 → loop.
+    Fix: store seen svix-id values in Redis (5–10 min TTL) and short-circuit
+    duplicates; use deleteMany / catch P2025; ack 200 on non-transient
+    business errors.
+
+[3] generateUsername race condition
+    File: src/services/clerk.service.ts:18-27
+    Two concurrent webhooks with the same base both pass findUnique, both
+    call create, second fails on the unique constraint.
+    Fix: rely on the DB unique constraint + retry on P2002.
+
+[4] Submission attempt-cap and attemptNumber race
+    File: src/controllers/submission.controller.ts:104-154
+    count → +1 is non-atomic. Two concurrent submits compute the same
+    previousAttempts, both try attemptNumber = N+1, second fails on the
+    unique [userId, challengeId, attemptNumber] → 500. The free-attempt cap
+    is also bypassable by ±1.
+    Fix: wrap count + create in a SERIALIZABLE transaction, or retry on P2002.
+
+[5] deleteChallenge ordering can lose data
+    File: src/controllers/admin.controller.ts:310-322
+    S3 is deleted before the DB update. If the DB update fails, the file
+    is gone but fileKey still points to it.
+    Fix: soft-delete the row first, then run S3 cleanup async.
+
+[6] Soft-deleted challenges still accept submissions and downloads
+    Files: src/controllers/submission.controller.ts:62-77,
+           src/controllers/challenge.controller.ts:207-235
+    Neither call filters deletedAt: null. A user with the URL can keep
+    submitting and downloading after admin deletes a challenge.
+    Fix: add deletedAt: null to both queries.
+
+---------------------------------------------
+SECURITY
+---------------------------------------------
+
+[7] No body-size limit on express.json() / urlencoded
+    File: src/app.ts:43-46
+    Set limit: '64kb'. You don't accept large bodies anywhere — uploads
+    go through S3 presign.
+
+[8] Path traversal allowed in confirmChallengeFile
+    File: src/controllers/admin.controller.ts:91-99
+    Regex /^[a-zA-Z0-9/._-]+$/ allows ".." and "//".
+    challenges/{id}/../foo passes the prefix check.
+    Fix: reject ".." and consecutive slashes, or normalize the key and
+    re-check the prefix.
+
+[9] Presigned PUT has no upload-size enforcement
+    File: src/controllers/admin.controller.ts:46-56
+    Only the client-claimed sizeBytes is checked. The presigned URL itself
+    doesn't bind Content-Length, so a client can upload anything.
+    Fix: use a POST policy with content-length-range, OR in
+    confirmChallengeFile HEAD the object and reject if ContentLength >
+    MAX_SIZE or ContentType is not in the allowlist.
+
+[10] publicSubmissions requires auth despite being a "public gallery"
+     File: src/routes/submission.routes.ts:20
+     Drop requireAuth, or rename the endpoint.
+
+[11] No rate limiting anywhere
+     express-rate-limit is installed; src/middleware/rateLimit.middleware.ts
+     is empty. Submissions, download URL generation, and the webhook are
+     all spammable.
+
+[12] No app.set('trust proxy', ...)
+     File: src/app.ts
+     Behind a proxy, req.ip is the proxy IP — breaks rate limits and the
+     /health endpoint that returns req.ip as "requestId".
+
+[13] updateUserProfile updates Clerk before DB
+     File: src/services/user.service.ts:11-25
+     If the DB update fails, Clerk and DB drift.
+     Fix: update DB first, Clerk second.
+
+[14] TOCTOU on username uniqueness
+     File: src/services/user.service.ts:11-19
+     Pre-check + update is racey.
+     Fix: rely on the DB unique constraint and translate P2002 → 409.
+
+---------------------------------------------
+VALIDATION / INPUT HANDLING
+---------------------------------------------
+
+[15] createChallenge validation gaps
+     File: src/controllers/admin.controller.ts:140-250
+       - objectives / tools not validated as arrays (Prisma 500s on string).
+       - points not validated for non-negative.
+       - q.order accepts NaN, Infinity, floats, negatives.
+       - No length caps on title, description, scenario, text, answerKey.
+     Fix: move the whole body through a zod schema like updateChallengeSchema.
+
+[16] submitChallenge accepts duplicate questionIds
+     File: src/controllers/submission.controller.ts:40-53
+     The Map silently keeps last-one-wins.
+     Fix: reject if submitted.length !== new Set(questionIds).size.
+
+[17] reportUrl is unvalidated
+     File: src/controllers/submission.controller.ts:55-57, 155
+     Any string accepted. Validate as URL, length-bound, ideally restrict
+     to your S3 bucket hostname.
+
+[18] normalize is too weak for graded answers
+     File: src/utils/normalize.utils.ts
+     lowercase + trim only — no internal whitespace collapse, punctuation
+     strip, smart-quote, or unicode NFC. Expect frequent "right answer,
+     wrong grade" complaints.
+
+[19] getPublicUserProfile is case-sensitive
+     File: src/services/user.service.ts:28-44
+     /users/JohnDoe 404s if stored as johndoe.
+     Fix: lowercase on store + lookup, or use mode: 'insensitive'.
+
+[20] listUsers / listChallenges search doesn't escape % and _
+     Files: src/controllers/admin.controller.ts:389-394,
+            src/controllers/challenge.controller.ts:90-95
+     Prisma contains → ILIKE %term%; passing % matches all rows.
+
+[21] updateMeSchema is not .strict()
+     File: src/types/user.types.ts
+     Unknown keys silently stripped instead of rejected.
+
+[22] No upper bound on page
+     A user can request page=10000000, causing a huge OFFSET query.
+     Cap (page - 1) * limit, or move hot endpoints to cursor pagination.
+
+---------------------------------------------
+OPERATIONAL / OBSERVABILITY
+---------------------------------------------
+
+[23] No graceful shutdown
+     File: src/server.ts
+     SIGTERM/SIGINT unhandled; prisma.$disconnect() never runs.
+
+[24] No 404 fallback handler
+     Unmatched routes hit Express's default. Add a JSON 404.
+
+[25] pino / pino-http installed but not wired up
+     Still using morgan('dev') + console.error everywhere.
+
+[26] @sentry/node installed but not initialized
+     No SENTRY_DSN in env.ts. Errors disappear into console.error.
+
+[27] getAdminStats re-runs 7 queries on every call
+     File: src/controllers/admin.controller.ts:437-510
+     Cache in Redis.
+
+[28] getMyStats ranking loads every user into memory
+     File: src/controllers/user.controller.ts:111-139
+     Already TODO'd. Becomes a problem past ~1k active users.
+
+---------------------------------------------
+SMALLER THINGS
+---------------------------------------------
+
+[29] /health returns requestId: req.ip — misnamed and wrong without
+     trust proxy. Use crypto.randomUUID() or pino-http's req.id.
+
+[30] getMe returns the entire User row including clerkId and
+     paystackCustomerId. Apply a select (matches your recent admin
+     "exclude sensitive fields" commit).
+
+[31] optionalAuth swallows all errors silently
+     File: src/middleware/auth.middleware.ts:51-53
+     DB outages look like "anonymous user" instead of 5xx.
+
+[32] requireAuth hits the DB on every request
+     Cache clerkId → user in Redis with a short TTL.
+
+[33] submitChallenge route lives at the wrong path
+     File: src/routes/submission.routes.ts:14
+     Currently /api/v1/submissions/challenges/:id/submit. Likely wanted
+     on challenge.routes.ts as /api/v1/challenges/:id/submit.
+
+[34] PRO subscription has no expiry semantics
+     SubscriptionStatus is FREE | PRO with no expiresAt. If billing stops,
+     nothing in the data model flips users back without an external job.
+     Add subscriptionExpiresAt and check it inline.

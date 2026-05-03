@@ -2,7 +2,7 @@ import { getAuth } from "@clerk/express";
 import type { Request, Response, NextFunction } from "express";
 import { prisma } from "../config/db.config";
 import { ApiError } from "../utils/ApiError";
-import { Role } from "../generated/prisma/enums";
+import { Role, SubscriptionStatus } from "../generated/prisma/enums";
 
 export const requireAuth = async (
   req: Request,
@@ -65,6 +65,26 @@ export const requireAdmin = async (
 
     if (req.user.role !== Role.ADMIN) {
       throw new ApiError(403, "Admin access required");
+    }
+
+    next();
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const requirePro = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
+  try {
+    if (!req.user) {
+      throw new ApiError(401, "Unauthorized");
+    }
+
+    if (req.user.subscriptionStatus !== SubscriptionStatus.PRO) {
+      throw new ApiError(403, "PRO subscription required");
     }
 
     next();

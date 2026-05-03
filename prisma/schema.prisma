@@ -18,12 +18,12 @@ model User {
   provider           String             @default("email")
   role               Role               @default(USER)
   subscriptionStatus SubscriptionStatus @default(FREE)
-  paystackCustomerId String?
+  polarSubscriptionId String?            @unique
+  subscriptionEndsAt DateTime?
+  polarCustomerId    String?            @unique
   submissions        Submission[]
   createdAt          DateTime           @default(now())
   updatedAt          DateTime           @updatedAt
-
-  @@index([paystackCustomerId])
 }
 
 model Challenge {

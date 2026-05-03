@@ -1,0 +1,178 @@
+BreachLab Backend — Features Yet To Build
+=========================================
+
+Inferred from empty source files, missing endpoints, and gaps in the data
+model. Roughly ordered by what unblocks the product.
+
+---------------------------------------------
+1. Subscriptions / payments (PRO upgrade flow)
+---------------------------------------------
+Empty: src/controllers/subscription.controller.ts
+       src/routes/subscription.routes.ts
+       src/services/polar.service.ts
+
+What's missing:
+  - Checkout session creation (Polar or Paystack — both referenced).
+  - Webhook handler for payment events (subscription.created, .updated,
+    .canceled, payment.failed, refund).
+  - Flip user.subscriptionStatus FREE ↔ PRO based on webhook events.
+  - Customer portal link / cancel / resume endpoints.
+  - subscriptionExpiresAt on User (currently no expiry — see observation 34).
+  - Idempotency for payment webhooks (same lesson as Clerk webhooks).
+  - Receipt / invoice access for users.
+
+Schema impact:
+  - Add subscriptionExpiresAt: DateTime? on User.
+  - Add subscriptionPlan / billingProvider if you support more than one.
+  - Possibly a Subscription model (history of plan changes) if you want
+    audit trail and analytics.
+
+---------------------------------------------
+2. Leaderboard
+---------------------------------------------
+Empty: src/controllers/leaderboard.controller.ts
+       src/routes/leaderboard.routes.ts
+
+What's missing:
+  - Global leaderboard: top N users by total points (best-score-per-
+    challenge sum).
+  - Per-domain leaderboards (APPSEC, SOC, NETWORK, WIRESHARK, GRC).
+  - Per-difficulty leaderboards.
+  - Pagination + the requesting user's own row pinned.
+  - Time-windowed leaderboards (weekly, monthly) — needs an indexed
+    createdAt scan or a precomputed snapshot.
+  - Caching: this is the most read-heavy endpoint. Redis cache with short
+    TTL (30–60 s) is fine for v1.
+  - Scale path: materialized view or scheduled refresh once the user
+    count crosses ~1k (see observation 28).
+
+---------------------------------------------
+3. Transactional email
+---------------------------------------------
+Empty: src/services/email.service.ts
+
+Likely email types:
+  - Welcome email on signup (after Clerk webhook fires).
+  - PRO subscription receipt + renewal reminders.
+  - Payment failed.
+  - Password / email change confirmations (or rely on Clerk for these).
+  - Challenge result (optional).
+  - Admin alerts on critical webhook failures.
+
+Pick a provider (Resend, Postmark, SES) and template store. Wire into
+the Clerk webhook for welcome, into payment webhooks for receipts.
+
+---------------------------------------------
+4. Rate limiting
+---------------------------------------------
+Empty: src/middleware/rateLimit.middleware.ts
+
+express-rate-limit is already a dependency. Suggested limits:
+  - Global: 100 req/min/IP.
+  - POST /challenges/:id/submit: 1 per 5s, 30/hour/user.
+  - GET  /challenges/:id/download: 10/min/user.
+  - POST /webhooks/clerk: high IP-based limit (svix retries).
+  - Auth-required write endpoints: per-user, not per-IP.
+Use Redis as the store so it works across multiple instances.
+
+---------------------------------------------
+5. Structured logging
+---------------------------------------------
+Empty: src/config/logger.ts
+
+pino + pino-http are already installed. Wire them up:
+  - One pino instance, JSON logs in prod, pretty in dev.
+  - pino-http with req.id (uuid) → propagate as response header.
+  - Replace every console.log / console.error with logger calls.
+  - Redact: authorization headers, cookies, password-like fields.
+
+---------------------------------------------
+6. Redis client
+---------------------------------------------
+Empty: src/config/redis.ts
+
+ioredis is installed and REDIS_URL is in env.ts. Need a single shared
+client used by:
+  - Rate limiter store.
+  - Webhook idempotency cache (svix-id dedupe).
+  - User cache for requireAuth (see observation 32).
+  - Admin stats cache (observation 27).
+  - Leaderboard cache.
+
+Add connection retry strategy and a healthcheck on the /health endpoint.
+
+---------------------------------------------
+7. Grader (extracted)
+---------------------------------------------
+Empty: src/utils/grader.ts
+
+Today the grading logic lives inline in submitChallenge. Move it out so
+you can:
+  - Swap the matcher (exact, regex, multiple-accepted-answers, range).
+  - Unit test grading without spinning up Express.
+  - Support per-question grader types in the schema:
+      Question.gradeType: EXACT | REGEX | NUMERIC | ANY_OF
+      Question.acceptedAnswers: String[] (instead of single answerKey)
+  - Stronger normalization (see observation 18).
+
+---------------------------------------------
+8. S3 utilities (extracted)
+---------------------------------------------
+Empty: src/utils/s3.ts
+
+Probably duplicate of services/s3.service.ts — pick one home. If kept,
+candidate utilities:
+  - Multipart upload helpers (for large challenge files).
+  - Object lifecycle policy bootstrapping.
+  - Orphan cleanup job (objects with no matching Challenge.fileKey).
+
+---------------------------------------------
+9. Admin features beyond the basics
+---------------------------------------------
+Existing admin controller covers create/update/delete + list users +
+stats. Likely still needed:
+  - Manually grant/revoke ADMIN or PRO on a user.
+  - Disable/ban a user (cascade should respect Submission.user).
+  - Refund / cancel a subscription on a user's behalf.
+  - View a single user's full submission history.
+  - Edit / add / remove individual questions on an existing challenge
+    (today updateChallenge can't touch questions — observation 15 area).
+  - Bulk import challenges from JSON.
+  - Audit log of admin actions.
+
+---------------------------------------------
+10. User-facing features not yet built
+---------------------------------------------
+  - Save / favorite a challenge (Bookmark model).
+  - Resume an in-progress attempt (today every submit is a fresh
+    transaction — no draft state).
+  - Achievements / badges unlocking logic. badges: String[] exists on
+    User but nothing writes to it.
+  - Friends / following / activity feed (if you want social proof).
+  - Per-user notifications (in-app + email).
+  - Password / email change flow (or confirm Clerk handles all of it).
+  - Account deletion request (GDPR) — currently only Clerk webhook
+    deletes; user has no self-serve path from your API.
+
+---------------------------------------------
+11. Operational / DX
+---------------------------------------------
+  - Sentry initialization (dependency installed, not wired).
+  - Graceful shutdown on SIGTERM/SIGINT (observation 23).
+  - 404 JSON fallback handler (observation 24).
+  - OpenAPI / Swagger spec at /api-docs (the / route already advertises
+    "docs: /api-docs" but it doesn't exist).
+  - Integration test suite (src/test exists but is empty).
+  - CI pipeline: typecheck + lint + tests on PR. .github exists — verify.
+  - Database backups + restore runbook.
+  - Migration plan for production (prisma migrate deploy is wired).
+
+---------------------------------------------
+12. Schema additions worth considering
+---------------------------------------------
+  - Tags on challenges (free-form taxonomy beyond Domain/Difficulty).
+  - Hints (purchasable / free, optional, with a points penalty).
+  - Walkthrough visibility (after a user passes, unlock the writeup).
+  - Challenge prerequisites (must pass X before Y).
+  - Per-question points instead of evenly splitting challenge.points.
+  - Submission.gradedAt vs Submission.createdAt if grading becomes async.

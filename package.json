@@ -20,6 +20,7 @@
     "@aws-sdk/client-s3": "^3.1037.0",
     "@aws-sdk/s3-request-presigner": "^3.1037.0",
     "@clerk/express": "^2.1.9",
+    "@polar-sh/sdk": "^0.47.1",
     "@prisma/adapter-pg": "^7.8.0",
     "@prisma/client": "^7.8.0",
     "@sentry/node": "^10.51.0",

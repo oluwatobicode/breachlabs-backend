@@ -16,6 +16,7 @@ import {
   adminRoutes,
   challengeRoutes,
   submissionRoutes,
+  subscriptionRoutes,
   userRoutes,
 } from "./routes";
 
@@ -66,6 +67,7 @@ app.use(`/api/${API_CONFIG.API_V1}/users`, userRoutes);
 app.use(`/api/${API_CONFIG.API_V1}/admin`, adminRoutes);
 app.use(`/api/${API_CONFIG.API_V1}/challenges`, challengeRoutes);
 app.use(`/api/${API_CONFIG.API_V1}/submissions`, submissionRoutes);
+app.use(`/api/${API_CONFIG.API_V1}/subscriptions`, subscriptionRoutes);
 app.use(errorMiddleware);
 
 export default app;
