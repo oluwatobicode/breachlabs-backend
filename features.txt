@@ -5,7 +5,7 @@ Inferred from empty source files, missing endpoints, and gaps in the data
 model. Roughly ordered by what unblocks the product.
 
 ---------------------------------------------
-1. Subscriptions / payments (PRO upgrade flow)
+1. Subscriptions / payments (PRO upgrade flow) ✅
 ---------------------------------------------
 Empty: src/controllers/subscription.controller.ts
        src/routes/subscription.routes.ts

@@ -7,11 +7,17 @@ import {
   getAParticularSubmission,
 } from "../controllers/submission.controller";
 import { requireAuth } from "../middleware/auth.middleware";
+import { submitChallengeRateLimit } from "../middleware/rateLimit.middleware";
 
 const router = Router();
 
 // Submit answers for a challenge (lives under /api/challenges/:id/submit)
-router.post("/challenges/:id/submit", requireAuth, submitChallenge);
+router.post(
+  "/challenges/:id/submit",
+  requireAuth,
+  submitChallengeRateLimit,
+  submitChallenge,
+);
 
 // Current user's submission history
 router.get("/me", requireAuth, listMySubmissions);

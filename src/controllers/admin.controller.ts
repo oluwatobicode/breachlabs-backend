@@ -92,6 +92,10 @@ export const confirmChallengeFile = async (
       return sendError(res, 400, "Invalid key format");
     }
 
+    if (key.includes("..") || key.includes("//")) {
+      return sendError(res, 400, "Invalid key format");
+    }
+
     // Security check: key must belong to this challenge
     const expectedPrefix = `challenges/${id}/`;
     if (!key.startsWith(expectedPrefix)) {
@@ -99,8 +103,9 @@ export const confirmChallengeFile = async (
     }
 
     // Verify file actually exists in S3 (defense in depth)
+    let head;
     try {
-      await s3.send(
+      head = await s3.send(
         new HeadObjectCommand({ Bucket: env.AWS_S3_BUCKET, Key: key }),
       );
     } catch {
@@ -109,6 +114,24 @@ export const confirmChallengeFile = async (
         404,
         "File not found in S3 — upload may have failed",
       );
+    }
+
+    if (
+      typeof head.ContentLength === "number" &&
+      head.ContentLength > FILE_UPLOAD_CONFIG.MAX_SIZE
+    ) {
+      return sendError(
+        res,
+        400,
+        `File too large. Max size: ${FILE_UPLOAD_CONFIG.MAX_SIZE / 1024 / 1024}MB`,
+      );
+    }
+
+    if (
+      !head.ContentType ||
+      !FILE_UPLOAD_CONFIG.ALLOWED_MIME_TYPES.includes(head.ContentType)
+    ) {
+      return sendError(res, 400, "Only .zip files are allowed");
     }
 
     // If challenge already had a file, delete the old one
@@ -307,19 +330,16 @@ export const deleteChallenge = async (
       return sendError(res, 404, "Challenge not found");
     }
 
-    if (challenge.fileKey) {
-      try {
-        await deleteObject(challenge.fileKey);
-      } catch (error) {
-        // Log and continue — DB soft-delete is the source of truth.
-        console.error("Failed to delete S3 object:", challenge.fileKey, error);
-      }
-    }
-
     await prisma.challenge.update({
       where: { id },
       data: { deletedAt: new Date(), fileKey: null },
     });
+
+    if (challenge.fileKey) {
+      void deleteObject(challenge.fileKey).catch((error) => {
+        console.error("Failed to delete S3 object:", challenge.fileKey, error);
+      });
+    }
 
     return sendSuccess(res, "Challenge deleted", 200);
   } catch (error) {

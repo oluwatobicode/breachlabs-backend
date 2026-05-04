@@ -19,8 +19,10 @@ import {
   subscriptionRoutes,
   userRoutes,
 } from "./routes";
+import * as Sentry from "@sentry/node";
 
 const app: Application = express();
+app.set("trust proxy", 1);
 
 // webhooks registered before express.json() — svix needs the raw body
 app.use(`/api/${API_CONFIG.API_V1}/webhooks`, webhookRoutes);
@@ -42,9 +44,9 @@ app.use(
   }),
 );
 app.use(morgan("dev"));
-app.use(express.json());
+app.use(express.json({ limit: "64kb" }));
 app.use(clerkMiddleware({ authorizedParties: allowedOrigins }));
-app.use(express.urlencoded({ extended: true }));
+app.use(express.urlencoded({ extended: true, limit: "64kb" }));
 
 // Test route
 app.get("/", (req: Request, res: Response) => {
@@ -68,6 +70,8 @@ app.use(`/api/${API_CONFIG.API_V1}/admin`, adminRoutes);
 app.use(`/api/${API_CONFIG.API_V1}/challenges`, challengeRoutes);
 app.use(`/api/${API_CONFIG.API_V1}/submissions`, submissionRoutes);
 app.use(`/api/${API_CONFIG.API_V1}/subscriptions`, subscriptionRoutes);
+
+Sentry.setupExpressErrorHandler(app);
 app.use(errorMiddleware);
 
 export default app;

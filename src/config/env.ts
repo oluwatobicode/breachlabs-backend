@@ -19,6 +19,8 @@ const envSchema = z.object({
   POLAR_MONTHLY_PRODUCT_ID: z.string().min(1),
   POLAR_SERVER: z.enum(["sandbox", "production"]).default("sandbox"),
   CHECKOUT_SUCCESS_URL: z.string().url(),
+  DSN_SENTRY: z.string().url().optional(),
+  SENTRY_ENVIRONMENT: z.string().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);

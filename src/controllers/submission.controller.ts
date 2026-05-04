@@ -10,6 +10,83 @@ import {
   MAX_LIMIT,
 } from "../config/constants.config";
 import { normalize } from "../utils/normalize.utils";
+import { ApiError } from "../utils/ApiError";
+
+const createSubmissionWithRetry = async ({
+  userId,
+  challengeId,
+  answers,
+  reportUrl,
+  score,
+  passed,
+  subscriptionStatus,
+}: {
+  userId: string;
+  challengeId: string;
+  answers: SubmittedAnswer[];
+  reportUrl: string | null;
+  score: number;
+  passed: boolean;
+  subscriptionStatus: SubscriptionStatus;
+}) => {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      return await prisma.$transaction(
+        async (tx) => {
+          const previousAttempts = await tx.submission.count({
+            where: { userId, challengeId },
+          });
+
+          if (
+            subscriptionStatus !== SubscriptionStatus.PRO &&
+            previousAttempts >= FREE_ATTEMPT_LIMIT
+          ) {
+            throw new ApiError(
+              403,
+              `Free users limited to ${FREE_ATTEMPT_LIMIT} attempts per challenge. Upgrade to PRO for unlimited tries.`,
+            );
+          }
+
+          return tx.submission.create({
+            data: {
+              userId,
+              challengeId,
+              answers: answers as unknown as Prisma.InputJsonValue,
+              score,
+              passed,
+              attemptNumber: previousAttempts + 1,
+              reportUrl,
+            },
+            select: {
+              id: true,
+              score: true,
+              passed: true,
+              attemptNumber: true,
+              createdAt: true,
+            },
+          });
+        },
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      );
+    } catch (error) {
+      if (error instanceof ApiError) {
+        throw error;
+      }
+
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        (error.code === "P2002" || error.code === "P2034") &&
+        attempt < 2
+      ) {
+        continue;
+      }
+
+      throw error;
+    }
+  }
+
+  throw new ApiError(409, "Please retry this submission");
+};
 
 /**
  * Normalize answer text for comparison: lowercase + trim whitespace.
@@ -57,10 +134,27 @@ export const submitChallenge = async (
     }
 
     const submitted = answers as SubmittedAnswer[];
+    const submittedQuestionIds = submitted.map((answer) => answer.questionId);
+
+    if (new Set(submittedQuestionIds).size !== submittedQuestionIds.length) {
+      return sendError(res, 400, "Duplicate questionIds are not allowed");
+    }
+
+    if (typeof reportUrl === "string") {
+      if (reportUrl.length > 2048) {
+        return sendError(res, 400, "reportUrl is too long");
+      }
+
+      try {
+        new URL(reportUrl);
+      } catch {
+        return sendError(res, 400, "reportUrl must be a valid URL");
+      }
+    }
 
     // --- Fetch challenge + questions (server-side answerKey access only) ---
-    const challenge = await prisma.challenge.findUnique({
-      where: { id },
+    const challenge = await prisma.challenge.findFirst({
+      where: { id, deletedAt: null },
       select: {
         id: true,
         isFree: true,
@@ -100,22 +194,6 @@ export const submitChallenge = async (
       }
     }
 
-    // --- Attempt cap for FREE users ---
-    const previousAttempts = await prisma.submission.count({
-      where: { userId: req.user!.id, challengeId: id },
-    });
-
-    if (
-      req.user!.subscriptionStatus !== SubscriptionStatus.PRO &&
-      previousAttempts >= FREE_ATTEMPT_LIMIT
-    ) {
-      return sendError(
-        res,
-        403,
-        `Free users limited to ${FREE_ATTEMPT_LIMIT} attempts per challenge. Upgrade to PRO for unlimited tries.`,
-      );
-    }
-
     // --- Grade ---
     const submittedMap = new Map(
       submitted.map((a) => [a.questionId, a.answer]),
@@ -144,23 +222,14 @@ export const submitChallenge = async (
     const passed = ratio >= (challenge.passScore ?? 70) / 100;
 
     // --- Persist ---
-    const submission = await prisma.submission.create({
-      data: {
-        userId: req.user!.id,
-        challengeId: id,
-        answers: submitted as unknown as Prisma.InputJsonValue,
-        score,
-        passed,
-        attemptNumber: previousAttempts + 1,
-        reportUrl: typeof reportUrl === "string" ? reportUrl : null,
-      },
-      select: {
-        id: true,
-        score: true,
-        passed: true,
-        attemptNumber: true,
-        createdAt: true,
-      },
+    const submission = await createSubmissionWithRetry({
+      userId: req.user!.id,
+      challengeId: id,
+      answers: submitted,
+      reportUrl: typeof reportUrl === "string" ? reportUrl : null,
+      score,
+      passed,
+      subscriptionStatus: req.user!.subscriptionStatus,
     });
 
     return sendSuccess(res, "Submission graded", 201, {

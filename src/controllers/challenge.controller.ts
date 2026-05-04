@@ -98,7 +98,6 @@ export const listChallenges = async (
 
     const [challenges, total] = await prisma.$transaction([
       prisma.challenge.findMany({
-        where,
         select: {
           id: true,
           title: true,
@@ -211,8 +210,8 @@ export const downloadChallengeFile = async (
   try {
     const id = req.params.id as string;
 
-    const challenge = await prisma.challenge.findUnique({
-      where: { id },
+    const challenge = await prisma.challenge.findFirst({
+      where: { id, deletedAt: null },
       select: {
         id: true,
         title: true,

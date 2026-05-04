@@ -1,11 +1,14 @@
 import { prisma } from "../config/db.config";
+import { Prisma } from "../generated/prisma/client";
 import { ClerkUserData } from "../types/ClerkUserData";
 
 const getPrimaryEmail = (data: ClerkUserData): string => {
-  const primary = data.email_addresses.find(
-    (e) => e.id === data.primary_email_address_id,
-  );
-  if (!primary) throw new Error("No primary email on Clerk user");
+  const primary =
+    data.email_addresses.find(
+      (e) => e.id === data.primary_email_address_id,
+    ) ?? data.email_addresses[0];
+
+  if (!primary) throw new Error("No email address on Clerk user");
   return primary.email_address;
 };
 
@@ -15,56 +18,102 @@ const getProvider = (data: ClerkUserData): string => {
   return "email";
 };
 
-const generateUsername = async (base: string): Promise<string> => {
-  const exists = await prisma.user.findUnique({ where: { username: base } });
-  if (!exists) return base;
-  // append last 4 chars of a random number until unique
-  let candidate = `${base}${Math.floor(1000 + Math.random() * 9000)}`;
-  while (await prisma.user.findUnique({ where: { username: candidate } })) {
-    candidate = `${base}${Math.floor(1000 + Math.random() * 9000)}`;
+const getUsernameBase = (data: ClerkUserData, email: string) =>
+  data.username ?? email.split("@")[0];
+
+const isUsernameConflict = (error: unknown) => {
+  if (!(error instanceof Prisma.PrismaClientKnownRequestError)) {
+    return false;
   }
-  return candidate;
+
+  if (error.code !== "P2002") {
+    return false;
+  }
+
+  const target = error.meta?.target;
+  return Array.isArray(target) && target.includes("username");
+};
+
+const createUserWithUniqueUsername = async (data: {
+  clerkId: string;
+  email: string;
+  avatar: string;
+  provider: string;
+  baseUsername: string;
+}) => {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const username =
+      attempt === 0
+        ? data.baseUsername
+        : `${data.baseUsername}${Math.floor(1000 + Math.random() * 9000)}`;
+
+    try {
+      return await prisma.user.create({
+        data: {
+          clerkId: data.clerkId,
+          username,
+          email: data.email,
+          avatar: data.avatar,
+          provider: data.provider,
+        },
+      });
+    } catch (error) {
+      if (isUsernameConflict(error)) {
+        continue;
+      }
+
+      throw error;
+    }
+  }
+
+  throw new Error("Failed to generate a unique username");
 };
 
 export const syncUserCreated = async (data: ClerkUserData) => {
   const email = getPrimaryEmail(data);
-  const base = data.username ?? email.split("@")[0];
-  const username = await generateUsername(base);
+  const baseUsername = getUsernameBase(data, email);
 
-  await prisma.user.create({
-    data: {
-      clerkId: data.id,
-      username,
-      email,
-      avatar: data.image_url,
-      provider: getProvider(data),
-    },
+  await createUserWithUniqueUsername({
+    clerkId: data.id,
+    email,
+    avatar: data.image_url,
+    provider: getProvider(data),
+    baseUsername,
   });
 };
 
 export const syncUserUpdated = async (data: ClerkUserData) => {
   const email = getPrimaryEmail(data);
-  const base = data.username ?? email.split("@")[0];
 
-  await prisma.user.upsert({
+  const existingUser = await prisma.user.findUnique({
     where: { clerkId: data.id },
-    update: {
-      username: base,
-      email,
-      avatar: data.image_url,
-    },
-    create: {
-      clerkId: data.id,
-      username: await generateUsername(base),
-      email,
-      avatar: data.image_url,
-      provider: getProvider(data),
-    },
+    select: { id: true },
+  });
+
+  if (existingUser) {
+    await prisma.user.update({
+      where: { clerkId: data.id },
+      data: {
+        email,
+        avatar: data.image_url,
+      },
+    });
+    return;
+  }
+
+  const baseUsername = getUsernameBase(data, email);
+
+  await createUserWithUniqueUsername({
+    clerkId: data.id,
+    email,
+    avatar: data.image_url,
+    provider: getProvider(data),
+    baseUsername,
   });
 };
 
 export const syncUserDeleted = async (data: { id: string }) => {
-  await prisma.user.delete({
+  await prisma.user.deleteMany({
     where: { clerkId: data.id },
   });
 };

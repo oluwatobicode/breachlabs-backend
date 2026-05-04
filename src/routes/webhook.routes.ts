@@ -2,6 +2,9 @@ import express, { Router, type Request, type Response } from "express";
 import { Webhook } from "svix";
 import { validateEvent, WebhookVerificationError } from "@polar-sh/sdk/webhooks";
 import { env } from "../config/env";
+import { ensureRedisConnection, redis } from "../config/redis";
+import { Prisma } from "../generated/prisma/client";
+import { webhookRateLimit } from "../middleware/rateLimit.middleware";
 import {
   syncUserCreated,
   syncUserUpdated,
@@ -14,10 +17,57 @@ import {
 } from "../services/polar-webhook.service";
 
 const router = Router();
+const WEBHOOK_ID_TTL_SECONDS = 10 * 60;
+
+const getWebhookCacheKey = (provider: "clerk" | "polar", id: string) =>
+  `webhook:${provider}:${id}`;
+
+const claimWebhookEvent = async (
+  provider: "clerk" | "polar",
+  id: string,
+) => {
+  try {
+    await ensureRedisConnection();
+    const result = await redis.set(
+      getWebhookCacheKey(provider, id),
+      "1",
+      "EX",
+      WEBHOOK_ID_TTL_SECONDS,
+      "NX",
+    );
+    return result === "OK";
+  } catch (error) {
+    console.error("Webhook idempotency unavailable:", error);
+    return true;
+  }
+};
+
+const releaseWebhookEvent = async (
+  provider: "clerk" | "polar",
+  id: string,
+) => {
+  try {
+    await ensureRedisConnection();
+    await redis.del(getWebhookCacheKey(provider, id));
+  } catch (error) {
+    console.error("Failed to release webhook lock:", error);
+  }
+};
+
+const isClerkBusinessError = (error: unknown) => {
+  if (error instanceof Prisma.PrismaClientKnownRequestError) {
+    return error.code === "P2002" || error.code === "P2025";
+  }
+
+  return (
+    error instanceof Error && error.message === "No email address on Clerk user"
+  );
+};
 
 // raw body is required for svix signature verification
 router.post(
   "/clerk",
+  webhookRateLimit,
   express.raw({ type: "application/json" }),
   async (req: Request, res: Response) => {
     const svixId = req.headers["svix-id"] as string;
@@ -43,6 +93,12 @@ router.post(
       return;
     }
 
+    const claimed = await claimWebhookEvent("clerk", svixId);
+    if (!claimed) {
+      res.status(200).json({ received: true, duplicate: true });
+      return;
+    }
+
     try {
       switch (event.type) {
         case "user.created":
@@ -58,6 +114,13 @@ router.post(
 
       res.status(200).json({ received: true });
     } catch (err) {
+      if (isClerkBusinessError(err)) {
+        console.error("Clerk webhook ignored:", err);
+        res.status(200).json({ received: true, ignored: true });
+        return;
+      }
+
+      await releaseWebhookEvent("clerk", svixId);
       console.error("Clerk webhook error:", err);
       res.status(500).json({ message: "Failed to process webhook" });
     }
@@ -66,6 +129,7 @@ router.post(
 
 router.post(
   "/polar",
+  webhookRateLimit,
   express.raw({ type: "application/json" }),
   async (req: Request, res: Response) => {
     let event;
@@ -82,6 +146,18 @@ router.post(
         return;
       }
       throw err;
+    }
+
+    const webhookIdHeader = req.headers["webhook-id"];
+    const webhookId =
+      typeof webhookIdHeader === "string" ? webhookIdHeader : undefined;
+
+    if (webhookId) {
+      const claimed = await claimWebhookEvent("polar", webhookId);
+      if (!claimed) {
+        res.status(200).json({ received: true, duplicate: true });
+        return;
+      }
     }
 
     try {
@@ -103,6 +179,9 @@ router.post(
 
       res.status(200).json({ received: true });
     } catch (err) {
+      if (webhookId) {
+        await releaseWebhookEvent("polar", webhookId);
+      }
       console.error("Polar webhook error:", err);
       res.status(500).json({ message: "Failed to process webhook" });
     }
