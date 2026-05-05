@@ -1,13 +1,14 @@
 import { NextFunction, Request, Response } from "express";
-import { sendError } from "../utils/ApiResponse";
+import { sendError, sendSuccess } from "../utils/ApiResponse";
 import { prisma } from "../config/db.config";
 import { getDownloadUrl } from "../services/s3.service";
-import {
-  Domain,
-  Difficulty,
-  SubscriptionStatus,
-} from "../generated/prisma/enums";
+import { Domain, Difficulty } from "../generated/prisma/enums";
 import { Prisma } from "../generated/prisma/client";
+import { normalize } from "../utils/normalize.utils";
+import { createSubmissionWithRetry } from "../utils/retrySubmit.utils";
+import { sanitizeSearchTerm } from "../utils/search.utils";
+import { hasActiveProAccess } from "../utils/subscription.utils";
+import { SubmittedAnswer } from "../types/submission.types";
 
 const SORT_MAP = {
   newest: { createdAt: "desc" as const },
@@ -18,6 +19,7 @@ const SORT_MAP = {
 
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 50;
+const MAX_OFFSET = 10_000;
 
 // Page-based pagination: users browse a filtered catalog and may jump to page N directly.
 // Cursor-based would be better for infinite-scroll feeds; offset is the right call for a
@@ -87,14 +89,25 @@ export const listChallenges = async (
       where.isFree = isFree === "true";
     }
 
-    if (search && typeof search === "string" && search.trim()) {
-      where.OR = [
-        { title: { contains: search.trim(), mode: "insensitive" } },
-        { description: { contains: search.trim(), mode: "insensitive" } },
-      ];
+    if (search && typeof search === "string") {
+      const sanitizedSearch = sanitizeSearchTerm(search);
+      if (sanitizedSearch) {
+        where.OR = [
+          { title: { contains: sanitizedSearch, mode: "insensitive" } },
+          {
+            description: {
+              contains: sanitizedSearch,
+              mode: "insensitive",
+            },
+          },
+        ];
+      }
     }
 
     const skip = (page - 1) * limit;
+    if (skip > MAX_OFFSET) {
+      return sendError(res, 400, "Requested page is too large");
+    }
 
     const [challenges, total] = await prisma.$transaction([
       prisma.challenge.findMany({
@@ -110,6 +123,7 @@ export const listChallenges = async (
         orderBy,
         skip,
         take: limit,
+        where,
       }),
       prisma.challenge.count({ where }),
     ]);
@@ -187,10 +201,7 @@ export const getChallengeById = async (
       return sendError(res, 404, "Challenge not found");
     }
 
-    if (
-      !challenge.isFree &&
-      req.user?.subscriptionStatus !== SubscriptionStatus.PRO
-    ) {
+    if (!challenge.isFree && !hasActiveProAccess(req.user)) {
       return sendError(res, 403, "This challenge requires a PRO subscription");
     }
 
@@ -231,7 +242,7 @@ export const downloadChallengeFile = async (
     // Access check: paid challenges require PRO subscription
     if (!challenge.isFree) {
       // req.user is set by requireAuth middleware
-      if (req.user!.subscriptionStatus !== SubscriptionStatus.PRO) {
+      if (!hasActiveProAccess(req.user)) {
         return sendError(
           res,
           403,
@@ -252,6 +263,159 @@ export const downloadChallengeFile = async (
     return res.json({
       downloadUrl,
       expiresIn: 600,
+    });
+  } catch (error) {
+    console.log(error);
+    next(error);
+  }
+};
+
+/**
+ * Normalize answer text for comparison: lowercase + trim whitespace.
+ * Both userAnswer and answerKey go through this before string compare.
+ */
+
+/*     Submit Challenge     */
+
+export const submitChallenge = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
+  try {
+    const id = req.params.id as string;
+    const { answers, reportUrl } = req.body as {
+      answers: unknown;
+      reportUrl?: unknown;
+    };
+
+    // --- Validate request body ---
+    if (!Array.isArray(answers) || answers.length === 0) {
+      return sendError(res, 400, "answers must be a non-empty array");
+    }
+
+    for (const [i, a] of answers.entries()) {
+      if (
+        !a ||
+        typeof a !== "object" ||
+        typeof (a as any).questionId !== "string" ||
+        typeof (a as any).answer !== "string"
+      ) {
+        return sendError(
+          res,
+          400,
+          `answers[${i}] must have shape { questionId: string, answer: string }`,
+        );
+      }
+    }
+
+    if (reportUrl !== undefined && typeof reportUrl !== "string") {
+      return sendError(res, 400, "reportUrl must be a string if provided");
+    }
+
+    const submitted = answers as SubmittedAnswer[];
+    const submittedQuestionIds = submitted.map((answer) => answer.questionId);
+
+    if (new Set(submittedQuestionIds).size !== submittedQuestionIds.length) {
+      return sendError(res, 400, "Duplicate questionIds are not allowed");
+    }
+
+    if (typeof reportUrl === "string") {
+      if (reportUrl.length > 2048) {
+        return sendError(res, 400, "reportUrl is too long");
+      }
+
+      try {
+        new URL(reportUrl);
+      } catch {
+        return sendError(res, 400, "reportUrl must be a valid URL");
+      }
+    }
+
+    // --- Fetch challenge + questions (server-side answerKey access only) ---
+    const challenge = await prisma.challenge.findFirst({
+      where: { id, deletedAt: null },
+      select: {
+        id: true,
+        isFree: true,
+        points: true,
+        passScore: true,
+        questions: {
+          select: { id: true, text: true, answerKey: true, order: true },
+        },
+      },
+    });
+
+    if (!challenge) {
+      return sendError(res, 404, "Challenge not found");
+    }
+
+    // --- Access check: paid challenges require PRO ---
+    const hasProAccess = hasActiveProAccess(req.user);
+
+    if (!challenge.isFree && !hasProAccess) {
+      return sendError(res, 403, "This challenge requires a PRO subscription");
+    }
+
+    // --- Validate every question is answered, no extras ---
+    const questionIds = new Set(challenge.questions.map((q) => q.id));
+    const submittedIds = new Set(submitted.map((a) => a.questionId));
+
+    for (const qid of submittedIds) {
+      if (!questionIds.has(qid)) {
+        return sendError(res, 400, `unknown questionId: ${qid}`);
+      }
+    }
+
+    for (const q of challenge.questions) {
+      if (!submittedIds.has(q.id)) {
+        return sendError(res, 400, `missing answer for question: ${q.id}`);
+      }
+    }
+
+    // --- Grade ---
+    const submittedMap = new Map(
+      submitted.map((a) => [a.questionId, a.answer]),
+    );
+
+    const breakdown = challenge.questions
+      .sort((a, b) => a.order - b.order)
+      .map((q) => {
+        const userAnswer = submittedMap.get(q.id) ?? "";
+        const correct = normalize(userAnswer) === normalize(q.answerKey);
+        return {
+          questionId: q.id,
+          text: q.text,
+          userAnswer,
+          correct,
+          // NOTE: not exposing correctAnswer — keeps retries meaningful
+        };
+      });
+
+    const correctCount = breakdown.filter((b) => b.correct).length;
+    const totalQuestions = challenge.questions.length;
+    const ratio = correctCount / totalQuestions;
+    const score = Math.round(ratio * challenge.points);
+    // passScore is the per-challenge pass threshold as a percentage (1-100);
+    // fall back to 70 for legacy rows where the column is null.
+    const passed = ratio >= (challenge.passScore ?? 70) / 100;
+
+    // --- Persist ---
+    const submission = await createSubmissionWithRetry({
+      userId: req.user!.id,
+      challengeId: id,
+      answers: submitted,
+      reportUrl: typeof reportUrl === "string" ? reportUrl : null,
+      score,
+      passed,
+      hasProAccess,
+    });
+
+    return sendSuccess(res, "Submission graded", 201, {
+      submission,
+      correctCount,
+      totalQuestions,
+      breakdown,
     });
   } catch (error) {
     console.log(error);

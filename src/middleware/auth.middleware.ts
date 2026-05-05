@@ -2,7 +2,8 @@ import { getAuth } from "@clerk/express";
 import type { Request, Response, NextFunction } from "express";
 import { prisma } from "../config/db.config";
 import { ApiError } from "../utils/ApiError";
-import { Role, SubscriptionStatus } from "../generated/prisma/enums";
+import { Role } from "../generated/prisma/enums";
+import { hasActiveProAccess } from "../utils/subscription.utils";
 
 export const requireAuth = async (
   req: Request,
@@ -48,8 +49,8 @@ export const optionalAuth = async (
       if (user) req.user = user;
     }
     next();
-  } catch {
-    next();
+  } catch (err) {
+    next(err);
   }
 };
 
@@ -83,7 +84,7 @@ export const requirePro = async (
       throw new ApiError(401, "Unauthorized");
     }
 
-    if (req.user.subscriptionStatus !== SubscriptionStatus.PRO) {
+    if (!hasActiveProAccess(req.user)) {
       throw new ApiError(403, "PRO subscription required");
     }
 

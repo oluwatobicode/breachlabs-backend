@@ -80,7 +80,7 @@ SECURITY
 
 [10] publicSubmissions requires auth despite being a "public gallery"
      File: src/routes/submission.routes.ts:20
-     Drop requireAuth, or rename the endpoint.
+     Drop requireAuth, or rename the endpoint. --done
 
 [11] No rate limiting anywhere
      express-rate-limit is installed; src/middleware/rateLimit.middleware.ts
@@ -182,7 +182,7 @@ SMALLER THINGS
 
 [30] getMe returns the entire User row including clerkId and
      paystackCustomerId. Apply a select (matches your recent admin
-     "exclude sensitive fields" commit).
+     "exclude sensitive fields" commit). --done
 
 [31] optionalAuth swallows all errors silently
      File: src/middleware/auth.middleware.ts:51-53
@@ -194,7 +194,7 @@ SMALLER THINGS
 [33] submitChallenge route lives at the wrong path
      File: src/routes/submission.routes.ts:14
      Currently /api/v1/submissions/challenges/:id/submit. Likely wanted
-     on challenge.routes.ts as /api/v1/challenges/:id/submit.
+     on challenge.routes.ts as /api/v1/challenges/:id/submit. --done
 
 [34] PRO subscription has no expiry semantics
      SubscriptionStatus is FREE | PRO with no expiresAt. If billing stops,

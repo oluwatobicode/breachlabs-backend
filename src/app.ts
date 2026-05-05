@@ -3,6 +3,7 @@ import express, {
   type Request,
   type Response,
 } from "express";
+import { randomUUID } from "node:crypto";
 import cors from "cors";
 import helmet from "helmet";
 import morgan from "morgan";
@@ -61,7 +62,7 @@ app.get("/", (req: Request, res: Response) => {
 app.get("/health", (req: Request, res: Response) =>
   res.status(200).json({
     status: "ok",
-    requestId: req.ip,
+    requestId: randomUUID(),
   }),
 );
 
@@ -70,6 +71,12 @@ app.use(`/api/${API_CONFIG.API_V1}/admin`, adminRoutes);
 app.use(`/api/${API_CONFIG.API_V1}/challenges`, challengeRoutes);
 app.use(`/api/${API_CONFIG.API_V1}/submissions`, submissionRoutes);
 app.use(`/api/${API_CONFIG.API_V1}/subscriptions`, subscriptionRoutes);
+app.use((_req: Request, res: Response) => {
+  res.status(404).json({
+    success: false,
+    message: "Route not found",
+  });
+});
 
 Sentry.setupExpressErrorHandler(app);
 app.use(errorMiddleware);

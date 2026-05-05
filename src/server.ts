@@ -2,15 +2,37 @@ import "./instrument";
 
 import { prisma } from "./config/db.config";
 import app from "./app";
+
 const PORT = process.env.PORT || 5000;
 
 async function main() {
   await prisma.$connect();
   console.log("Connected to the database");
 
-  app.listen(PORT, () => {
+  const server = app.listen(PORT, () => {
     console.log(`Server is running on port ${PORT}`);
   });
+
+  let shuttingDown = false;
+
+  const shutdown = (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`${signal} received. Shutting down gracefully...`);
+
+    server.close(() => {
+      prisma
+        .$disconnect()
+        .then(() => process.exit(0))
+        .catch((error) => {
+          console.error("Failed to disconnect Prisma:", error);
+          process.exit(1);
+        });
+    });
+  };
+
+  process.on("SIGINT", () => shutdown("SIGINT"));
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
 }
 
 main().catch((error) => {

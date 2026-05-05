@@ -4,21 +4,48 @@ import { sendSuccess } from "../utils/ApiResponse";
 import type { UpdateMeInput } from "../types/user.types";
 import { prisma } from "../config/db.config";
 import { Domain } from "../generated/prisma/enums";
+import { ApiError } from "../utils/ApiError";
 
-export const getMe = (req: Request, res: Response) => {
-  sendSuccess(res, "Fetched user", 200, req.user);
+export const getMe = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: req.user!.id },
+      select: {
+        username: true,
+        email: true,
+        avatar: true,
+        bio: true,
+        badges: true,
+        subscriptionStatus: true,
+        subscriptionEndsAt: true,
+        createdAt: true,
+      },
+    });
+
+    if (!user) {
+      throw new ApiError(404, "User not found");
+    }
+
+    sendSuccess(res, "Fetched user", 200, user);
+  } catch (error) {
+    next(error);
+  }
 };
 
 export const updateMe = async (
   req: Request,
   res: Response,
-  next: NextFunction
+  next: NextFunction,
 ) => {
   try {
     const updated = await updateUserProfile(
       req.user!.id,
       req.user!.clerkId,
-      req.body as UpdateMeInput
+      req.body as UpdateMeInput,
     );
     sendSuccess(res, "Profile updated", 200, updated);
   } catch (err) {
@@ -29,7 +56,7 @@ export const updateMe = async (
 export const getPublicUserProfile = async (
   req: Request,
   res: Response,
-  next: NextFunction
+  next: NextFunction,
 ) => {
   try {
     const profile = await getPublicProfile(req.params.username as string);
@@ -49,7 +76,7 @@ const RANK_BUCKETS: Array<{ maxPercentile: number; label: string }> = [
 export const getMyStats = async (
   req: Request,
   res: Response,
-  next: NextFunction
+  next: NextFunction,
 ) => {
   try {
     const userId = req.user!.id;
@@ -71,7 +98,7 @@ export const getMyStats = async (
     // (b) total points = sum of best scores
     const points = Array.from(bestPerChallenge.values()).reduce(
       (a, b) => a + b,
-      0
+      0,
     );
 
     // (c) completed = distinct passed challenges
@@ -86,7 +113,7 @@ export const getMyStats = async (
       _count: { _all: true },
     });
     const totalMap = new Map(
-      totalPerDomain.map((r) => [r.domain, r._count._all])
+      totalPerDomain.map((r) => [r.domain, r._count._all]),
     );
 
     const completedPerDomain = completedChallengeIds.length
@@ -97,7 +124,7 @@ export const getMyStats = async (
         })
       : [];
     const completedMap = new Map(
-      completedPerDomain.map((r) => [r.domain, r._count._all])
+      completedPerDomain.map((r) => [r.domain, r._count._all]),
     );
 
     const domainProgress = domains.map((domain) => ({

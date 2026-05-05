@@ -9,6 +9,6 @@ export const updateMeSchema = z.object({
     .optional(),
   bio: z.string().max(200, "Bio must be at most 200 characters").optional(),
   avatar: z.string().url("Avatar must be a valid URL").optional(),
-});
+}).strict();
 
 export type UpdateMeInput = z.infer<typeof updateMeSchema>;

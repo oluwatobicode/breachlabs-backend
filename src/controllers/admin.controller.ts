@@ -17,9 +17,14 @@ import {
   SubscriptionStatus,
 } from "../generated/prisma/enums";
 import { Prisma } from "../generated/prisma/client";
-import { updateChallengeSchema } from "../types/admin.types";
+import {
+  createChallengeSchema,
+  updateChallengeSchema,
+} from "../types/admin.types";
+import { sanitizeSearchTerm } from "../utils/search.utils";
 
 const ADMIN_USERS_MAX_LIMIT = 100;
+const MAX_OFFSET = 10_000;
 
 /* validates the request and returns a temporary, signed permission slip (presigned URL) */
 export const uploadChallengeFile = async (
@@ -134,24 +139,21 @@ export const confirmChallengeFile = async (
       return sendError(res, 400, "Only .zip files are allowed");
     }
 
-    // If challenge already had a file, delete the old one
     const existing = await prisma.challenge.findUnique({
       where: { id },
       select: { fileKey: true },
     });
-    if (existing?.fileKey && existing.fileKey !== key) {
-      try {
-        await deleteObject(existing.fileKey);
-      } catch (error) {
-        // Don't fail the request — log and continue (new file is what matters)
-        console.error("Failed to delete old file:", existing.fileKey, error);
-      }
-    }
 
     const updated = await prisma.challenge.update({
       where: { id },
       data: { fileKey: key },
     });
+
+    if (existing?.fileKey && existing.fileKey !== key) {
+      void deleteObject(existing.fileKey).catch((error) => {
+        console.error("Failed to delete old file:", existing.fileKey, error);
+      });
+    }
 
     return sendSuccess(res, "File confirmed", 200, { challenge: updated });
   } catch (error) {
@@ -166,6 +168,11 @@ export const createChallenge = async (
   next: NextFunction,
 ) => {
   try {
+    const parsed = createChallengeSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return sendError(res, 400, parsed.error.issues[0].message);
+    }
+
     const {
       title,
       description,
@@ -178,68 +185,7 @@ export const createChallenge = async (
       isFree,
       points,
       questions,
-    } = req.body;
-
-    // Validate required fields
-    if (!title || typeof title !== "string") {
-      return sendError(res, 400, "title is required");
-    }
-    if (!description || typeof description !== "string") {
-      return sendError(res, 400, "description is required");
-    }
-    if (!scenario || typeof scenario !== "string") {
-      return sendError(res, 400, "scenario is required");
-    }
-
-    // Validate enums against Prisma values (no garbage strings)
-    if (!Object.values(Domain).includes(domain)) {
-      return sendError(
-        res,
-        400,
-        `domain must be one of: ${Object.values(Domain).join(", ")}`,
-      );
-    }
-    if (!Object.values(Difficulty).includes(difficulty)) {
-      return sendError(
-        res,
-        400,
-        `difficulty must be one of: ${Object.values(Difficulty).join(", ")}`,
-      );
-    }
-
-    if (
-      passScore !== undefined &&
-      (!Number.isInteger(passScore) || passScore < 1 || passScore > 100)
-    ) {
-      return sendError(
-        res,
-        400,
-        "passScore must be an integer between 1 and 100",
-      );
-    }
-
-    // Validate questions
-    if (!Array.isArray(questions) || questions.length === 0) {
-      return sendError(res, 400, "questions array is required (at least one)");
-    }
-
-    for (const [i, q] of questions.entries()) {
-      if (!q.text || typeof q.text !== "string") {
-        return sendError(res, 400, `questions[${i}].text is required`);
-      }
-      if (!q.answerKey || typeof q.answerKey !== "string") {
-        return sendError(res, 400, `questions[${i}].answerKey is required`);
-      }
-      if (typeof q.order !== "number") {
-        return sendError(res, 400, `questions[${i}].order must be a number`);
-      }
-    }
-
-    // Check for duplicate orders within the submitted questions
-    const orders = questions.map((q: any) => q.order);
-    if (new Set(orders).size !== orders.length) {
-      return sendError(res, 400, "questions must have unique order values");
-    }
+    } = parsed.data;
 
     // Atomic create: challenge + nested questions in one transaction
     const challenge = await prisma.challenge.create({
@@ -255,7 +201,7 @@ export const createChallenge = async (
         ...(typeof isFree === "boolean" && { isFree }),
         ...(typeof points === "number" && { points }),
         questions: {
-          create: questions.map((q: any) => ({
+          create: questions.map((q) => ({
             text: q.text,
             answerKey: q.answerKey,
             order: q.order,
@@ -406,14 +352,20 @@ export const listUsers = async (
       where.subscriptionStatus = subscriptionStatus as SubscriptionStatus;
     }
 
-    if (typeof search === "string" && search.trim()) {
-      where.OR = [
-        { username: { contains: search.trim(), mode: "insensitive" } },
-        { email: { contains: search.trim(), mode: "insensitive" } },
-      ];
+    if (typeof search === "string") {
+      const sanitizedSearch = sanitizeSearchTerm(search);
+      if (sanitizedSearch) {
+        where.OR = [
+          { username: { contains: sanitizedSearch, mode: "insensitive" } },
+          { email: { contains: sanitizedSearch, mode: "insensitive" } },
+        ];
+      }
     }
 
     const skip = (page - 1) * limit;
+    if (skip > MAX_OFFSET) {
+      return sendError(res, 400, "Requested page is too large");
+    }
 
     const [users, total] = await prisma.$transaction([
       prisma.user.findMany({

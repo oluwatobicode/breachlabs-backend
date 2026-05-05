@@ -2,33 +2,46 @@ import { clerkClient } from "@clerk/express";
 import { prisma } from "../config/db.config";
 import { ApiError } from "../utils/ApiError";
 import type { UpdateMeInput } from "../types/user.types";
+import { Prisma } from "../generated/prisma/client";
 
 export const updateUserProfile = async (
   userId: string,
   clerkId: string,
-  data: UpdateMeInput
+  data: UpdateMeInput,
 ) => {
-  if (data.username) {
-    const taken = await prisma.user.findUnique({
-      where: { username: data.username },
+  try {
+    const updated = await prisma.user.update({
+      where: { id: userId },
+      data,
     });
-    if (taken && taken.id !== userId) {
+
+    if (data.username) {
+      await clerkClient.users.updateUser(clerkId, { username: data.username });
+    }
+
+    return updated;
+  } catch (error) {
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === "P2002"
+    ) {
       throw new ApiError(409, "Username is already taken");
     }
 
-    await clerkClient.users.updateUser(clerkId, { username: data.username });
+    throw error;
   }
-
-  return prisma.user.update({
-    where: { id: userId },
-    data,
-  });
 };
 
 export const getPublicProfile = async (username: string) => {
-  const user = await prisma.user.findUnique({
-    where: { username },
+  const user = await prisma.user.findFirst({
+    where: {
+      username: {
+        equals: username,
+        mode: "insensitive",
+      },
+    },
     select: {
+      id: true,
       username: true,
       avatar: true,
       bio: true,
@@ -38,14 +51,15 @@ export const getPublicProfile = async (username: string) => {
 
   if (!user) throw new ApiError(404, "User not found");
 
-  const rank = await getUserRank(username);
+  const rank = await getUserRank(user.id);
 
-  return { ...user, rank };
+  const { id, ...profile } = user;
+  return { ...profile, rank };
 };
 
-const getUserRank = async (username: string): Promise<number> => {
+const getUserRank = async (userId: string): Promise<number> => {
   const userCompletions = await prisma.submission.findMany({
-    where: { user: { username }, passed: true },
+    where: { userId, passed: true },
     select: { challengeId: true },
     distinct: ["challengeId"],
   });

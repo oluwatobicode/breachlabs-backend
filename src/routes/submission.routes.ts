@@ -1,29 +1,25 @@
 import { Router } from "express";
 
 import {
-  submitChallenge,
   listMySubmissions,
   publicSubmissions,
+  getPublicUserCompletedChallenges,
+  listMyChallengeSubmissions,
   getAParticularSubmission,
 } from "../controllers/submission.controller";
 import { requireAuth } from "../middleware/auth.middleware";
-import { submitChallengeRateLimit } from "../middleware/rateLimit.middleware";
 
 const router = Router();
-
-// Submit answers for a challenge (lives under /api/challenges/:id/submit)
-router.post(
-  "/challenges/:id/submit",
-  requireAuth,
-  submitChallengeRateLimit,
-  submitChallenge,
-);
 
 // Current user's submission history
 router.get("/me", requireAuth, listMySubmissions);
 
 // Public gallery of passed submissions
-router.get("/public", requireAuth, publicSubmissions);
+router.get("/public", publicSubmissions);
+router.get("/public/users/:username/challenges", getPublicUserCompletedChallenges);
+
+// Current user's submissions for a single challenge
+router.get("/challenges/:challengeId/me", requireAuth, listMyChallengeSubmissions);
 
 // One specific submission (with access control)
 router.get("/:id", requireAuth, getAParticularSubmission);

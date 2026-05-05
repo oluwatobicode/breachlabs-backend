@@ -3,9 +3,13 @@ import {
   listChallenges,
   getChallengeById,
   downloadChallengeFile,
+  submitChallenge,
 } from "../controllers/challenge.controller";
 import { optionalAuth, requireAuth } from "../middleware/auth.middleware";
-import { downloadChallengeFileRateLimit } from "../middleware/rateLimit.middleware";
+import {
+  downloadChallengeFileRateLimit,
+  submitChallengeRateLimit,
+} from "../middleware/rateLimit.middleware";
 
 const router = Router();
 
@@ -16,6 +20,13 @@ router.get(
   requireAuth,
   downloadChallengeFileRateLimit,
   downloadChallengeFile,
+);
+// Submit answers for a challenge
+router.post(
+  "/:id/submit",
+  requireAuth,
+  submitChallengeRateLimit,
+  submitChallenge,
 );
 
 export default router;
