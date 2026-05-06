@@ -3,6 +3,7 @@ import { prisma } from "../config/db.config";
 import { ApiError } from "../utils/ApiError";
 import type { UpdateMeInput } from "../types/user.types";
 import { Prisma } from "../generated/prisma/client";
+import { getUserRankFromRedis } from "./redis.service";
 
 export const updateUserProfile = async (
   userId: string,
@@ -51,31 +52,8 @@ export const getPublicProfile = async (username: string) => {
 
   if (!user) throw new ApiError(404, "User not found");
 
-  const rank = await getUserRank(user.id);
+  const { rank, points } = await getUserRankFromRedis(user.id);
 
   const { id, ...profile } = user;
-  return { ...profile, rank };
-};
-
-const getUserRank = async (userId: string): Promise<number> => {
-  const userCompletions = await prisma.submission.findMany({
-    where: { userId, passed: true },
-    select: { challengeId: true },
-    distinct: ["challengeId"],
-  });
-
-  const userCount = userCompletions.length;
-
-  const result = await prisma.$queryRaw<[{ count: bigint }]>`
-    SELECT COUNT(*) as count
-    FROM (
-      SELECT "userId"
-      FROM "Submission"
-      WHERE passed = true
-      GROUP BY "userId"
-      HAVING COUNT(DISTINCT "challengeId") > ${userCount}
-    ) ahead
-  `;
-
-  return Number(result[0].count) + 1;
+  return { ...profile, rank, points };
 };

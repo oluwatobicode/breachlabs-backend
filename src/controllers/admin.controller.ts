@@ -22,6 +22,21 @@ import {
   updateChallengeSchema,
 } from "../types/admin.types";
 import { sanitizeSearchTerm } from "../utils/search.utils";
+import { rebuildLeaderboardFromDatabase } from "../services/redis.service";
+
+export const rebuildLeaderboard = async (
+  _req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
+  try {
+    const result = await rebuildLeaderboardFromDatabase();
+    return sendSuccess(res, "Leaderboard rebuilt", 200, result);
+  } catch (error) {
+    console.error(error);
+    next(error);
+  }
+};
 
 const ADMIN_USERS_MAX_LIMIT = 100;
 const MAX_OFFSET = 10_000;

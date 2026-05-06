@@ -7,6 +7,7 @@ import {
   deleteChallenge,
   listUsers,
   getAdminStats,
+  rebuildLeaderboard,
 } from "../controllers/admin.controller";
 import { requireAuth, requireAdmin } from "../middleware/auth.middleware";
 
@@ -23,5 +24,7 @@ router.post("/challenges/:id/file/confirm", confirmChallengeFile);
 
 router.get("/users", listUsers);
 router.get("/stats", getAdminStats);
+
+router.post("/leaderboard/rebuild", rebuildLeaderboard);
 
 export default router;
