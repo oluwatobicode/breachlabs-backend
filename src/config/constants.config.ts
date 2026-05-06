@@ -11,3 +11,10 @@ export const FILE_UPLOAD_CONFIG = {
 export const DEFAULT_LIMIT = 20;
 export const MAX_LIMIT = 50;
 export const FREE_ATTEMPT_LIMIT = 3;
+
+// const DEFAULT_LIMIT = 20;
+// const MAX_LIMIT = 50;
+export const MAX_OFFSET = 10_000;
+
+export const LEADERBOARD_KEY = "leaderboard";
+export const LEADERBOARD_USER_KEY_PREFIX = "leaderboard:user:";

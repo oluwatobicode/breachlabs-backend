@@ -1,5 +1,10 @@
 import type { Request, Response, NextFunction } from "express";
 import { updateUserProfile, getPublicProfile } from "../services/user.service";
+import {
+  getUserRankFromRedis,
+  summarizeBestChallengeScores,
+  updateLeaderboardDisplay,
+} from "../services/redis.service";
 import { sendSuccess } from "../utils/ApiResponse";
 import type { UpdateMeInput } from "../types/user.types";
 import { prisma } from "../config/db.config";
@@ -47,6 +52,16 @@ export const updateMe = async (
       req.user!.clerkId,
       req.body as UpdateMeInput,
     );
+
+    try {
+      await updateLeaderboardDisplay(updated.id, {
+        username: updated.username,
+        avatar: updated.avatar,
+      });
+    } catch (error) {
+      console.error("Failed to sync leaderboard display after profile update:", error);
+    }
+
     sendSuccess(res, "Profile updated", 200, updated);
   } catch (err) {
     next(err);
@@ -83,23 +98,15 @@ export const getMyStats = async (
 
     // (a) user's passed submissions, reduced to best score per challenge
     const passed = await prisma.submission.findMany({
-      where: { userId, passed: true },
+      where: {
+        userId,
+        passed: true,
+        challenge: { deletedAt: null },
+      },
       select: { challengeId: true, score: true },
     });
 
-    const bestPerChallenge = new Map<string, number>();
-    for (const s of passed) {
-      const prev = bestPerChallenge.get(s.challengeId);
-      if (prev === undefined || s.score > prev) {
-        bestPerChallenge.set(s.challengeId, s.score);
-      }
-    }
-
-    // (b) total points = sum of best scores
-    const points = Array.from(bestPerChallenge.values()).reduce(
-      (a, b) => a + b,
-      0,
-    );
+    const { bestPerChallenge, points } = summarizeBestChallengeScores(passed);
 
     // (c) completed = distinct passed challenges
     const completed = bestPerChallenge.size;
@@ -110,6 +117,7 @@ export const getMyStats = async (
 
     const totalPerDomain = await prisma.challenge.groupBy({
       by: ["domain"],
+      where: { deletedAt: null },
       _count: { _all: true },
     });
     const totalMap = new Map(
@@ -133,33 +141,16 @@ export const getMyStats = async (
       total: totalMap.get(domain) ?? 0,
     }));
 
-    // (e) approximate ranking — best-per-challenge points across all users.
-    // TODO: optimize with materialized view or Redis cache once user count > 1000.
-    const ranking = await prisma.$queryRaw<
-      Array<{ userId: string; points: bigint }>
-    >`
-      SELECT "userId", SUM(best_score)::bigint AS points
-      FROM (
-        SELECT "userId", "challengeId", MAX(score) AS best_score
-        FROM "Submission"
-        WHERE passed = true
-        GROUP BY "userId", "challengeId"
-      ) t
-      GROUP BY "userId"
-      ORDER BY points DESC
-    `;
-
     let rank: { rank: number | null; label: string };
-    const position = ranking.findIndex((r) => r.userId === userId);
+    const { rank: redisRank, totalUsers } = await getUserRankFromRedis(userId);
 
-    if (position === -1) {
+    if (redisRank === null) {
       rank = { rank: null, label: "Unranked" };
     } else {
-      const oneIndexed = position + 1;
-      if (oneIndexed <= 100) {
-        rank = { rank: oneIndexed, label: `#${oneIndexed}` };
+      if (redisRank <= 100) {
+        rank = { rank: redisRank, label: `#${redisRank}` };
       } else {
-        const percentile = oneIndexed / ranking.length;
+        const percentile = totalUsers === 0 ? 1 : redisRank / totalUsers;
         const bucket = RANK_BUCKETS.find((b) => percentile <= b.maxPercentile);
         rank = { rank: null, label: bucket?.label ?? "Top 50%" };
       }

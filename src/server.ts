@@ -2,6 +2,7 @@ import "./instrument";
 
 import { prisma } from "./config/db.config";
 import app from "./app";
+import { ensureRedisConnection } from "./config/redis";
 
 const PORT = process.env.PORT || 5000;
 
@@ -9,7 +10,8 @@ async function main() {
   await prisma.$connect();
   console.log("Connected to the database");
 
-  const server = app.listen(PORT, () => {
+  const server = app.listen(PORT, async () => {
+    await ensureRedisConnection();
     console.log(`Server is running on port ${PORT}`);
   });
 

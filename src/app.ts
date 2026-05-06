@@ -16,6 +16,7 @@ import webhookRoutes from "./routes/webhook.routes";
 import {
   adminRoutes,
   challengeRoutes,
+  leaderboardRoutes,
   submissionRoutes,
   subscriptionRoutes,
   userRoutes,
@@ -69,6 +70,7 @@ app.get("/health", (req: Request, res: Response) =>
 app.use(`/api/${API_CONFIG.API_V1}/users`, userRoutes);
 app.use(`/api/${API_CONFIG.API_V1}/admin`, adminRoutes);
 app.use(`/api/${API_CONFIG.API_V1}/challenges`, challengeRoutes);
+app.use(`/api/${API_CONFIG.API_V1}/leaderboard`, leaderboardRoutes);
 app.use(`/api/${API_CONFIG.API_V1}/submissions`, submissionRoutes);
 app.use(`/api/${API_CONFIG.API_V1}/subscriptions`, subscriptionRoutes);
 app.use((_req: Request, res: Response) => {

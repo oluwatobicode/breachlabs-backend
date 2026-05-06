@@ -9,6 +9,15 @@ import { createSubmissionWithRetry } from "../utils/retrySubmit.utils";
 import { sanitizeSearchTerm } from "../utils/search.utils";
 import { hasActiveProAccess } from "../utils/subscription.utils";
 import { SubmittedAnswer } from "../types/submission.types";
+import {
+  recomputeUserPoints,
+  syncUserToLeaderboard,
+} from "../services/redis.service";
+import {
+  DEFAULT_LIMIT,
+  MAX_LIMIT,
+  MAX_OFFSET,
+} from "../config/constants.config";
 
 const SORT_MAP = {
   newest: { createdAt: "desc" as const },
@@ -16,10 +25,6 @@ const SORT_MAP = {
   "points-asc": { points: "asc" as const },
   "points-desc": { points: "desc" as const },
 };
-
-const DEFAULT_LIMIT = 20;
-const MAX_LIMIT = 50;
-const MAX_OFFSET = 10_000;
 
 // Page-based pagination: users browse a filtered catalog and may jump to page N directly.
 // Cursor-based would be better for infinite-scroll feeds; offset is the right call for a
@@ -410,6 +415,18 @@ export const submitChallenge = async (
       passed,
       hasProAccess,
     });
+
+    if (passed) {
+      try {
+        const points = await recomputeUserPoints(req.user!.id);
+        await syncUserToLeaderboard(req.user!.id, points, {
+          username: req.user!.username,
+          avatar: req.user!.avatar,
+        });
+      } catch (error) {
+        console.error("Failed to sync leaderboard after submission:", error);
+      }
+    }
 
     return sendSuccess(res, "Submission graded", 201, {
       submission,

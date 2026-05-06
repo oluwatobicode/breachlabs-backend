@@ -11,13 +11,13 @@ redis.on("error", (error) => {
 });
 
 export const ensureRedisConnection = async () => {
-  if (
-    redis.status === "ready" ||
-    redis.status === "connecting" ||
-    redis.status === "connect"
-  ) {
+  if (redis.status === "ready") return;
+
+  if (redis.status === "connecting" || redis.status === "connect") {
+    await new Promise<void>((resolve) => redis.once("ready", () => resolve()));
     return;
   }
 
   await redis.connect();
+  console.log("Redis connected");
 };

@@ -14,7 +14,8 @@
     "migrate:prod": "prisma migrate deploy",
     "generate": "prisma generate",
     "studio": "prisma studio",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "leaderboard:backfill": "npm run build && node dist/scripts/backfill-leaderboard.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1037.0",

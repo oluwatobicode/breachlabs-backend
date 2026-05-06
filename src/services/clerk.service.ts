@@ -1,6 +1,10 @@
 import { prisma } from "../config/db.config";
 import { Prisma } from "../generated/prisma/client";
 import { ClerkUserData } from "../types/ClerkUserData";
+import {
+  removeUserFromLeaderboard,
+  updateLeaderboardDisplay,
+} from "./redis.service";
 
 const getPrimaryEmail = (data: ClerkUserData): string => {
   const primary =
@@ -91,13 +95,22 @@ export const syncUserUpdated = async (data: ClerkUserData) => {
   });
 
   if (existingUser) {
-    await prisma.user.update({
+    const updatedUser = await prisma.user.update({
       where: { clerkId: data.id },
       data: {
         email,
         avatar: data.image_url,
       },
     });
+
+    try {
+      await updateLeaderboardDisplay(updatedUser.id, {
+        username: updatedUser.username,
+        avatar: updatedUser.avatar,
+      });
+    } catch (error) {
+      console.error("Failed to sync leaderboard display after Clerk update:", error);
+    }
     return;
   }
 
@@ -113,7 +126,20 @@ export const syncUserUpdated = async (data: ClerkUserData) => {
 };
 
 export const syncUserDeleted = async (data: { id: string }) => {
+  const existingUser = await prisma.user.findUnique({
+    where: { clerkId: data.id },
+    select: { id: true },
+  });
+
   await prisma.user.deleteMany({
     where: { clerkId: data.id },
   });
+
+  if (!existingUser) return;
+
+  try {
+    await removeUserFromLeaderboard(existingUser.id);
+  } catch (error) {
+    console.error("Failed to remove deleted user from leaderboard:", error);
+  }
 };
