@@ -206,10 +206,6 @@ export const getChallengeById = async (
       return sendError(res, 404, "Challenge not found");
     }
 
-    if (!challenge.isFree && !hasActiveProAccess(req.user)) {
-      return sendError(res, 403, "This challenge requires a PRO subscription");
-    }
-
     const { deletedAt, ...rest } = challenge;
     return res.json({ challenge: rest });
   } catch (error) {
