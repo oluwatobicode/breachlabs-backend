@@ -207,6 +207,11 @@ export const getChallengeById = async (
     }
 
     const { deletedAt, ...rest } = challenge;
+
+    if (!rest.isFree && !hasActiveProAccess(req.user)) {
+      rest.questions = [];
+    }
+
     return res.json({ challenge: rest });
   } catch (error) {
     console.log(error);
