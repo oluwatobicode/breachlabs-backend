@@ -20,9 +20,16 @@ import { Prisma } from "../generated/prisma/client";
 import {
   createChallengeSchema,
   updateChallengeSchema,
+  createQuestionSchema,
+  updateQuestionSchema,
+  updateUserRoleSchema,
+  updateUserSubscriptionSchema,
 } from "../types/admin.types";
 import { sanitizeSearchTerm } from "../utils/search.utils";
-import { rebuildLeaderboardFromDatabase } from "../services/redis.service";
+import {
+  rebuildLeaderboardFromDatabase,
+  recomputeUsersForChallenge,
+} from "../services/redis.service";
 
 export const rebuildLeaderboard = async (
   _req: Request,
@@ -252,7 +259,7 @@ export const updateChallenge = async (
 
     const existing = await prisma.challenge.findUnique({
       where: { id },
-      select: { id: true, deletedAt: true },
+      select: { id: true, deletedAt: true, points: true },
     });
 
     if (!existing || existing.deletedAt) {
@@ -264,6 +271,21 @@ export const updateChallenge = async (
       data: parsed.data as Prisma.ChallengeUpdateInput,
       include: { questions: { orderBy: { order: "asc" } } },
     });
+
+    const pointsChanged =
+      typeof parsed.data.points === "number" &&
+      parsed.data.points !== existing.points;
+
+    if (pointsChanged) {
+      try {
+        await recomputeUsersForChallenge(id);
+      } catch (error) {
+        console.error(
+          "Failed to recompute leaderboard after challenge update:",
+          error,
+        );
+      }
+    }
 
     return sendSuccess(res, "Challenge updated", 200, { challenge: updated });
   } catch (error) {
@@ -300,6 +322,15 @@ export const deleteChallenge = async (
       void deleteObject(challenge.fileKey).catch((error) => {
         console.error("Failed to delete S3 object:", challenge.fileKey, error);
       });
+    }
+
+    try {
+      await recomputeUsersForChallenge(id);
+    } catch (error) {
+      console.error(
+        "Failed to recompute leaderboard after challenge delete:",
+        error,
+      );
     }
 
     return sendSuccess(res, "Challenge deleted", 200);
@@ -490,6 +521,264 @@ export const getAdminStats = async (
       },
       recentSignups,
       recentSubmissions,
+    });
+  } catch (error) {
+    console.error(error);
+    next(error);
+  }
+};
+
+/* -------------------------------------------------------------------------- */
+/*                            Question Management                             */
+/* -------------------------------------------------------------------------- */
+
+export const createQuestion = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
+  try {
+    const challengeId = req.params.id as string;
+
+    const parsed = createQuestionSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return sendError(res, 400, parsed.error.issues[0].message);
+    }
+
+    const challenge = await prisma.challenge.findUnique({
+      where: { id: challengeId },
+      select: { id: true, deletedAt: true },
+    });
+
+    if (!challenge || challenge.deletedAt) {
+      return sendError(res, 404, "Challenge not found");
+    }
+
+    try {
+      const question = await prisma.question.create({
+        data: { challengeId, ...parsed.data },
+      });
+      return sendSuccess(res, "Question created", 201, { question });
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === "P2002"
+      ) {
+        return sendError(
+          res,
+          409,
+          "A question with that order already exists for this challenge",
+        );
+      }
+      throw error;
+    }
+  } catch (error) {
+    console.error(error);
+    next(error);
+  }
+};
+
+export const updateQuestion = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
+  try {
+    const challengeId = req.params.id as string;
+    const questionId = req.params.questionId as string;
+
+    const parsed = updateQuestionSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return sendError(res, 400, parsed.error.issues[0].message);
+    }
+
+    const question = await prisma.question.findUnique({
+      where: { id: questionId },
+      select: { id: true, challengeId: true },
+    });
+
+    if (!question || question.challengeId !== challengeId) {
+      return sendError(res, 404, "Question not found");
+    }
+
+    try {
+      const updated = await prisma.question.update({
+        where: { id: questionId },
+        data: parsed.data,
+      });
+      return sendSuccess(res, "Question updated", 200, { question: updated });
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === "P2002"
+      ) {
+        return sendError(
+          res,
+          409,
+          "A question with that order already exists for this challenge",
+        );
+      }
+      throw error;
+    }
+  } catch (error) {
+    console.error(error);
+    next(error);
+  }
+};
+
+export const deleteQuestion = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
+  try {
+    const challengeId = req.params.id as string;
+    const questionId = req.params.questionId as string;
+
+    const question = await prisma.question.findUnique({
+      where: { id: questionId },
+      select: { id: true, challengeId: true },
+    });
+
+    if (!question || question.challengeId !== challengeId) {
+      return sendError(res, 404, "Question not found");
+    }
+
+    // A challenge with zero questions can't be graded — refuse the delete and
+    // make the admin add a replacement first.
+    const remaining = await prisma.question.count({ where: { challengeId } });
+    if (remaining <= 1) {
+      return sendError(
+        res,
+        400,
+        "Cannot delete the last question — challenge must keep at least one",
+      );
+    }
+
+    await prisma.question.delete({ where: { id: questionId } });
+    return sendSuccess(res, "Question deleted", 200);
+  } catch (error) {
+    console.error(error);
+    next(error);
+  }
+};
+
+/* -------------------------------------------------------------------------- */
+/*                       User Role / Subscription Admin                        */
+/* -------------------------------------------------------------------------- */
+
+export const updateUserRole = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
+  try {
+    const userId = req.params.id as string;
+
+    const parsed = updateUserRoleSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return sendError(res, 400, parsed.error.issues[0].message);
+    }
+
+    const target = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, role: true },
+    });
+
+    if (!target) {
+      return sendError(res, 404, "User not found");
+    }
+
+    // Refuse to demote the last remaining ADMIN — keeps the platform from
+    // getting locked out of admin operations.
+    if (target.role === Role.ADMIN && parsed.data.role !== Role.ADMIN) {
+      const adminCount = await prisma.user.count({
+        where: { role: Role.ADMIN },
+      });
+      if (adminCount <= 1) {
+        return sendError(res, 400, "Cannot demote the last remaining admin");
+      }
+    }
+
+    const updated = await prisma.user.update({
+      where: { id: userId },
+      data: { role: parsed.data.role as Role },
+      select: {
+        id: true,
+        username: true,
+        email: true,
+        role: true,
+        subscriptionStatus: true,
+      },
+    });
+
+    return sendSuccess(res, "User role updated", 200, { user: updated });
+  } catch (error) {
+    console.error(error);
+    next(error);
+  }
+};
+
+export const updateUserSubscription = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
+  try {
+    const userId = req.params.id as string;
+
+    const parsed = updateUserSubscriptionSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return sendError(res, 400, parsed.error.issues[0].message);
+    }
+
+    const target = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true },
+    });
+
+    if (!target) {
+      return sendError(res, 404, "User not found");
+    }
+
+    const status = parsed.data.subscriptionStatus as SubscriptionStatus;
+
+    // If admin didn't pass an end date, derive one: PRO gets +1 year so we
+    // don't accidentally write a row that's already expired; FREE clears it.
+    let subscriptionEndsAt: Date | null;
+    if (parsed.data.subscriptionEndsAt === undefined) {
+      if (status === SubscriptionStatus.PRO) {
+        const oneYear = new Date();
+        oneYear.setFullYear(oneYear.getFullYear() + 1);
+        subscriptionEndsAt = oneYear;
+      } else {
+        subscriptionEndsAt = null;
+      }
+    } else {
+      subscriptionEndsAt =
+        parsed.data.subscriptionEndsAt === null
+          ? null
+          : new Date(parsed.data.subscriptionEndsAt);
+    }
+
+    const updated = await prisma.user.update({
+      where: { id: userId },
+      data: {
+        subscriptionStatus: status,
+        subscriptionEndsAt,
+      },
+      select: {
+        id: true,
+        username: true,
+        email: true,
+        role: true,
+        subscriptionStatus: true,
+        subscriptionEndsAt: true,
+      },
+    });
+
+    return sendSuccess(res, "User subscription updated", 200, {
+      user: updated,
     });
   } catch (error) {
     console.error(error);

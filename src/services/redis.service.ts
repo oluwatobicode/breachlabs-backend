@@ -5,6 +5,64 @@ import {
 import { prisma } from "../config/db.config";
 import { ensureRedisConnection, redis } from "../config/redis";
 
+export const recomputeUsersForChallenge = async (challengeId: string) => {
+  // Find every user with at least one passed submission for this challenge —
+  // these are the only users whose totals can shift when a challenge's points
+  // change or it gets soft-deleted.
+  const rows = await prisma.submission.findMany({
+    where: { challengeId, passed: true },
+    select: {
+      userId: true,
+      user: { select: { id: true, username: true, avatar: true } },
+    },
+    distinct: ["userId"],
+  });
+
+  let updated = 0;
+  for (const row of rows) {
+    const points = await recomputeUserPoints(row.userId);
+    if (points <= 0) {
+      await removeUserFromLeaderboard(row.userId);
+    } else {
+      await syncUserToLeaderboard(row.userId, points, {
+        username: row.user.username,
+        avatar: row.user.avatar,
+      });
+    }
+    updated += 1;
+  }
+
+  return { affectedUsers: updated };
+};
+
+export const isLeaderboardEmpty = async () => {
+  await ensureRedisConnection();
+  return (await redis.zcard(LEADERBOARD_KEY)) === 0;
+};
+
+export const ensureLeaderboardPopulated = async () => {
+  if (!(await isLeaderboardEmpty())) {
+    return { rebuilt: false as const };
+  }
+
+  // Empty ZSET on boot likely means Redis was restarted without persistence
+  // (no AOF/RDB) — rebuild from Postgres so the leaderboard isn't wiped.
+  const passedExists = await prisma.submission.findFirst({
+    where: { passed: true, challenge: { deletedAt: null } },
+    select: { id: true },
+  });
+
+  if (!passedExists) {
+    return { rebuilt: false as const };
+  }
+
+  console.log(
+    "Leaderboard ZSET empty but passed submissions exist — rebuilding from DB",
+  );
+  const result = await rebuildLeaderboardFromDatabase();
+  return { rebuilt: true as const, ...result };
+};
+
 type ChallengeScoreRow = {
   challengeId: string;
   score: number;

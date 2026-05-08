@@ -61,5 +61,51 @@ export const updateChallengeSchema = z
     message: "At least one field must be provided",
   });
 
+export const createQuestionSchema = z
+  .object({
+    text: z.string().min(1).max(QUESTION_TEXT_MAX_LENGTH),
+    answerKey: z.string().min(1).max(ANSWER_KEY_MAX_LENGTH),
+    order: z.number().finite().int().min(0),
+  })
+  .strict();
+
+export const updateQuestionSchema = z
+  .object({
+    text: z.string().min(1).max(QUESTION_TEXT_MAX_LENGTH).optional(),
+    answerKey: z.string().min(1).max(ANSWER_KEY_MAX_LENGTH).optional(),
+    order: z.number().finite().int().min(0).optional(),
+  })
+  .strict()
+  .refine((data) => Object.keys(data).length > 0, {
+    message: "At least one field must be provided",
+  });
+
 export type CreateChallengeInput = z.infer<typeof createChallengeSchema>;
 export type UpdateChallengeInput = z.infer<typeof updateChallengeSchema>;
+export type CreateQuestionInput = z.infer<typeof createQuestionSchema>;
+export type UpdateQuestionInput = z.infer<typeof updateQuestionSchema>;
+
+const ROLE_VALUES = ["USER", "PRO_USER", "ADMIN"] as const;
+const SUBSCRIPTION_VALUES = ["FREE", "PRO"] as const;
+
+export const updateUserRoleSchema = z
+  .object({ role: z.enum(ROLE_VALUES) })
+  .strict();
+
+export const updateUserSubscriptionSchema = z
+  .object({
+    subscriptionStatus: z.enum(SUBSCRIPTION_VALUES),
+    // Optional override; when omitted, controller derives a sensible default
+    // (1 year out for PRO, null for FREE).
+    subscriptionEndsAt: z
+      .string()
+      .datetime({ offset: true })
+      .nullable()
+      .optional(),
+  })
+  .strict();
+
+export type UpdateUserRoleInput = z.infer<typeof updateUserRoleSchema>;
+export type UpdateUserSubscriptionInput = z.infer<
+  typeof updateUserSubscriptionSchema
+>;

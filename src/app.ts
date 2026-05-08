@@ -12,6 +12,8 @@ import { clerkMiddleware } from "@clerk/express";
 import { env } from "./config/env";
 import { errorMiddleware } from "./middleware/error.middleware";
 import webhookRoutes from "./routes/webhook.routes";
+import { prisma } from "./config/db.config";
+import { redis, ensureRedisConnection } from "./config/redis";
 
 import {
   adminRoutes,
@@ -60,12 +62,44 @@ app.get("/", (req: Request, res: Response) => {
   });
 });
 
-app.get("/health", (req: Request, res: Response) =>
-  res.status(200).json({
-    status: "ok",
-    requestId: randomUUID(),
-  }),
-);
+app.get("/health", async (_req: Request, res: Response) => {
+  const requestId = randomUUID();
+
+  const [dbResult, redisResult] = await Promise.allSettled([
+    prisma.$queryRaw`SELECT 1`,
+    (async () => {
+      await ensureRedisConnection();
+      return redis.ping();
+    })(),
+  ]);
+
+  const db = dbResult.status === "fulfilled" ? "ok" : "down";
+  const cache = redisResult.status === "fulfilled" ? "ok" : "down";
+
+  if (db === "down" && dbResult.status === "rejected") {
+    console.error("Health check: DB ping failed", dbResult.reason);
+  }
+  if (cache === "down" && redisResult.status === "rejected") {
+    console.error("Health check: Redis ping failed", redisResult.reason);
+  }
+
+  // DB is hard-required; Redis-only outage is "degraded" so the leaderboard
+  // can fail open while the rest of the API keeps serving traffic.
+  const status =
+    db === "ok" && cache === "ok"
+      ? "ok"
+      : db === "ok"
+        ? "degraded"
+        : "down";
+
+  const httpCode = db === "ok" ? 200 : 503;
+
+  res.status(httpCode).json({
+    status,
+    requestId,
+    checks: { db, cache },
+  });
+});
 
 app.use(`/api/${API_CONFIG.API_V1}/users`, userRoutes);
 app.use(`/api/${API_CONFIG.API_V1}/admin`, adminRoutes);

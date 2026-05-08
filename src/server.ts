@@ -3,6 +3,7 @@ import "./instrument";
 import { prisma } from "./config/db.config";
 import app from "./app";
 import { ensureRedisConnection } from "./config/redis";
+import { ensureLeaderboardPopulated } from "./services/redis.service";
 
 const PORT = process.env.PORT || 5000;
 
@@ -12,6 +13,16 @@ async function main() {
 
   const server = app.listen(PORT, async () => {
     await ensureRedisConnection();
+    try {
+      const result = await ensureLeaderboardPopulated();
+      if (result.rebuilt) {
+        console.log(
+          `Leaderboard auto-rebuilt: processed=${result.processedUsers} ranked=${result.rankedUsers}`,
+        );
+      }
+    } catch (error) {
+      console.error("Leaderboard auto-rebuild failed:", error);
+    }
     console.log(`Server is running on port ${PORT}`);
   });
 
