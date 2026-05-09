@@ -25,6 +25,7 @@ export const getMe = async (
         avatar: true,
         bio: true,
         badges: true,
+        role: true,
         subscriptionStatus: true,
         subscriptionEndsAt: true,
         createdAt: true,
@@ -59,7 +60,10 @@ export const updateMe = async (
         avatar: updated.avatar,
       });
     } catch (error) {
-      console.error("Failed to sync leaderboard display after profile update:", error);
+      console.error(
+        "Failed to sync leaderboard display after profile update:",
+        error,
+      );
     }
 
     sendSuccess(res, "Profile updated", 200, updated);
